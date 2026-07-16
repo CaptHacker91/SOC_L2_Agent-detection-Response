@@ -7,7 +7,10 @@ class ChatbotService:
     """
 
     def __init__(self, api_key):
-        genai.configure(api_key=api_key)
+
+        genai.configure(
+            api_key=api_key
+        )
 
         self.model = genai.GenerativeModel(
             "gemini-2.5-flash"
@@ -17,13 +20,13 @@ class ChatbotService:
         self,
         question,
         alert,
-        report,
+        logs,
     ):
 
         prompt = f"""
-You are an experienced SOC Level 2 Analyst.
+You are an experienced SOC Level 2 Security Analyst.
 
-Current Alert
+Current Security Alert
 
 Threat:
 {alert.get("threat")}
@@ -31,22 +34,49 @@ Threat:
 Severity:
 {alert.get("severity")}
 
-MITRE:
+Risk Score:
+{alert.get("risk_score")}
+
+Detection:
+{alert.get("final_detection")}
+
+MITRE Technique:
 {alert.get("mapped_technique")}
 
-Investigation Report:
+MITRE Tactic:
+{alert.get("mitre_tactic")}
 
-{report}
+Business Impact:
+{alert.get("business_impact")}
 
-Analyst Question:
+Investigation Priority:
+{alert.get("investigation_priority")}
+
+Associated Logs
+
+{logs}
+
+Analyst Question
 
 {question}
 
-Answer professionally.
+Provide a professional SOC analyst response including:
+
+- Threat explanation
+- Root cause
+- Investigation guidance
+- Containment recommendations
+- Remediation steps
 """
 
-        response = self.model.generate_content(
-            prompt
-        )
+        try:
 
-        return response.text
+            response = self.model.generate_content(
+                prompt
+            )
+
+            return response.text
+
+        except Exception as error:
+
+            return f"Gemini API Error: {error}"

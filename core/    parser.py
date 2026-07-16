@@ -1,37 +1,50 @@
 class DetectionParser:
     """
-    Parse Detection Dataset
+    Parse Blue Team Defense Dataset
     """
 
     def parse(self, records):
+        """
+        Parse raw records into
+        a standardized format.
+        """
 
-        parsed = []
+        parsed_records = []
 
         for record in records:
 
-            parsed.append({
+            parsed_records.append(
+                {
+                    "id": record.get(
+                        "id",
+                        0,
+                    ),
 
-                "id":
-                record.get("id", ""),
+                    "threat": record.get(
+                        "threat",
+                        "Unknown Threat",
+                    ),
 
-                "threat":
-                record.get("threat", "Unknown Threat"),
+                    "rule_type": record.get(
+                        "rule_type",
+                        "Unknown",
+                    ),
 
-                "description":
-                record.get("description", ""),
+                    "signature": record.get(
+                        "signature",
+                        "Unknown",
+                    ),
 
-                "rule_type":
-                record.get("rule_type", ""),
+                    "tool": record.get(
+                        "tool",
+                        "Unknown",
+                    ),
 
-                "signature":
-                record.get("signature", ""),
+                    "mapped_technique": record.get(
+                        "mapped_technique",
+                        "Unknown",
+                    ),
+                }
+            )
 
-                "tool":
-                record.get("tool", ""),
-
-                "mapped_technique":
-                record.get("mapped_technique", "")
-
-            })
-
-        return parsed
+        return parsed_records

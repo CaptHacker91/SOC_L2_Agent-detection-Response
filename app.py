@@ -1,29 +1,47 @@
+# Imports
+
 import streamlit as st
+import os
 
-st.set_page_config(
-    page_title="AI-Assisted SOC Level 2 Investigation Platform",
-    page_icon="🛡️",
-    layout="wide"
+from dotenv import load_dotenv
+
+from core.file_loader import FileLoader
+from core.parser import DetectionParser
+from core.normalizer import DataNormalizer
+
+from engine.detection_engine import DetectionEngine
+from engine.mitre_mapper import MitreMapper
+from engine.severity_engine import SeverityEngine
+from engine.alert_triangle import AlertTriangle
+
+from llm_services.chatbot_service import ChatbotService
+
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv(
+    "GEMINI_API_KEY"
 )
 
-st.title("🛡️ AI-Assisted SOC Level 2 Investigation Platform")
-st.subheader("Version 1 Prototype")
+if not GEMINI_API_KEY:
+    st.error("Gemini API Key not found.")
+    st.stop()
 
-st.markdown("---")
-
-st.write("### Upload Blue Team Defense Dataset")
-
-uploaded_file = st.file_uploader(
-    "Upload a JSONL file",
-    type=["jsonl"]
+chatbot = ChatbotService(
+    GEMINI_API_KEY
 )
 
-if uploaded_file is not None:
-    st.success("✅ File uploaded successfully!")
+DATASET_PATH = (
+    "data/BLUE_TEAM_DEFENSE_DATASET.jsonl"
+)
 
-    st.write("**File Name:**", uploaded_file.name)
-    st.write("**File Size:**", f"{uploaded_file.size} bytes")
+loader = FileLoader(DATASET_PATH)
 
-    st.info("Next Step ➜ File Loader Module")
-else:
-    st.warning("Please upload the Blue Team Defense Dataset (.jsonl)")
+records = loader.load()
+
+st.success(
+    "Blue Team Dataset Loaded Successfully"
+)
+
+st.write(
+    f"Loaded Records: {len(records)}"
+)

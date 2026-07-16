@@ -1,42 +1,31 @@
 import json
-from pathlib import Path
 
 
 class FileLoader:
     """
-    Load Blue Team Detection Dataset
+    Load Blue Team Defense Dataset
     """
 
     def __init__(self, file_path):
-        self.file_path = Path(file_path)
+        self.file_path = file_path
 
     def load(self):
-
-        if not self.file_path.exists():
-            raise FileNotFoundError(
-                f"Dataset not found : {self.file_path}"
-            )
+        """
+        Load JSONL dataset
+        """
 
         records = []
 
         with open(
             self.file_path,
             "r",
-            encoding="utf-8"
+            encoding="utf-8",
         ) as file:
 
             for line in file:
 
-                line = line.strip()
-
-                if line:
-
-                    try:
-                        records.append(
-                            json.loads(line)
-                        )
-
-                    except json.JSONDecodeError:
-                        continue
+                records.append(
+                    json.loads(line)
+                )
 
         return records
