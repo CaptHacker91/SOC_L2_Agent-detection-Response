@@ -1,44 +1,82 @@
 class SeverityEngine:
- """  SOC Risk Score Engine """
+    """
+    SOC Risk Scoring Engine
 
-  def calculate(self, dataframe):
+    Calculates:
+    - Risk Score
+    - Severity
+    """
 
-   dataframe["risk_score"] = dataframe["threat"].apply(
-              self._risk_score
-                               )
-                dataframe["severity"] = dataframe["risk_score"].apply(
-                    self._severity
-                               )
-                        return dataframe
-                                 def _risk_score(self, threat):
+    def __init__(self):
+        self.scores = self._load_scores()
 
-                                  scores = {
-                                 "Credential Dumping": 9.8,
+    def _load_scores(self):
+        """
+        Threat Risk Scores
+        """
 
-                                 "PowerShell Abuse": 9.4,
-                                 "Ransomware Execution": 10.0,
-                                 "Lateral Movement": 9.3,
-                                 "Persistence": 8.8,
-                                 "Privilege Escalation": 9.5,
+        return {
 
-                                 "Defense Evasion": 8.7,
-                                 "Suspicious Login": 7.2,
-                                 "Reconnaissance": 5.6
+            "Credential Dumping": 9.8,
 
-                                 }
-         return scores.get(                                                                                                                                                                                                                                     
-                  threat,                                                                                                                                                                                                                                          
-                   6.5
-                )
+            "PowerShell Abuse": 9.4,
 
-         def _severity(self, score):
-         if score >= 9.0:
-                 return "Critical"
+            "Ransomware Execution": 10.0,
 
-         elif score >= 7.0:
-                 return "High"
+            "Lateral Movement": 9.2,
 
-                elif score >= 4.0:
-return "Medium"
-else:
-return "Low"                                                                                                                                                                                                                                                                                       
+            "Persistence": 8.8,
+
+            "Privilege Escalation": 9.5,
+
+            "Defense Evasion": 8.7,
+
+            "Suspicious Login": 7.2,
+
+            "Reconnaissance": 5.6,
+
+        }
+
+    def calculate(self, dataframe):
+        """
+        Calculate SOC Risk Score
+        """
+
+        dataframe["risk_score"] = (
+            dataframe["threat"]
+            .apply(self._risk_score)
+        )
+
+        dataframe["severity"] = (
+            dataframe["risk_score"]
+            .apply(self._severity)
+        )
+
+        return dataframe
+
+    def _risk_score(self, threat):
+        """
+        Return Risk Score
+        """
+
+        return self.scores.get(
+            threat,
+            6.5
+        )
+
+    def _severity(self, score):
+        """
+        Convert Risk Score
+        into Severity
+        """
+
+        if score >= 9.0:
+            return "Critical"
+
+        if score >= 7.0:
+            return "High"
+
+        if score >= 4.0:
+            return "Medium"
+
+        return "Low"

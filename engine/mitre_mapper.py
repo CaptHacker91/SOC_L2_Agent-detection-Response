@@ -1,43 +1,54 @@
-import pandas as pd
-
-
 class MitreMapper:
     """
-        MITRE ATT&CK Mapping Engine
-            """
+    MITRE ATT&CK Mapping Engine
 
-                def map(self, dataframe):
+    Maps MITRE Techniques to their
+    corresponding ATT&CK Tactics.
+    """
 
-                        df = dataframe.copy()
+    def __init__(self):
+        self.mapping = self._load_mapping()
 
-                                df["mitre_tactic"] = df["mapped_technique"].apply(
-                                            self._get_tactic
-                                                    )
+    def _load_mapping(self):
+        """
+        MITRE Technique Mapping
+        """
 
-                                                            return df
+        return {
+            "T1059.001": "Execution",
+            "T1003.001": "Credential Access",
+            "T1486": "Impact",
+            "T1021": "Lateral Movement",
+            "T1547": "Persistence",
+            "T1110": "Credential Access",
+            "T1078": "Initial Access",
+            "T1047": "Execution",
+            "T1082": "Discovery",
+            "T1083": "Discovery",
+            "T1055": "Defense Evasion",
+            "T1562": "Defense Evasion",
+            "T1105": "Command and Control",
+            "T1053": "Persistence",
+        }
 
-                                                                def _get_tactic(self, technique):
+    def map(self, dataframe):
+        """
+        Add MITRE Tactic Column
+        """
 
-                                                                        mapping = {
+        dataframe["mitre_tactic"] = (
+            dataframe["mapped_technique"]
+            .apply(self._get_tactic)
+        )
 
-                                                                                    "T1059.001": "Execution",
-                                                                                                "T1003.001": "Credential Access",
-                                                                                                            "T1486": "Impact",
-                                                                                                                        "T1021": "Lateral Movement",
-                                                                                                                                    "T1547": "Persistence",
-                                                                                                                                                "T1110": "Credential Access",
-                                                                                                                                                            "T1078": "Initial Access",
-                                                                                                                                                                        "T1047": "Execution",
-                                                                                                                                                                                    "T1082": "Discovery",
-                                                                                                                                                                                                "T1083": "Discovery",
-                                                                                                                                                                                                            "T1055": "Defense Evasion",
-                                                                                                                                                                                                                        "T1562": "Defense Evasion",
-                                                                                                                                                                                                                                    "T1105": "Command and Control",
-                                                                                                                                                                                                                                                "T1053": "Persistence"
+        return dataframe
 
-                                                                                                                                                                                                                                                        }
+    def _get_tactic(self, technique):
+        """
+        Return MITRE Tactic
+        """
 
-                                                                                                                                                                                                                                                                return mapping.get(
-                                                                                                                                                                                                                                                                            technique,
-                                                                                                                                                                                                                                                                                        "Unknown"
-                                                                                                                                                                                                                                                                                                )
+        return self.mapping.get(
+            technique,
+            "Unknown"
+        )

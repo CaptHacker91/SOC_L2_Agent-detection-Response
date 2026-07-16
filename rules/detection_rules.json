@@ -1,0 +1,32 @@
+[
+    {
+        "threat": "PowerShell Abuse",
+        "severity": "Critical",
+        "risk_score": 9.4,
+        "mitre": "T1059.001"
+    },
+    {
+        "threat": "Credential Dumping",
+        "severity": "Critical",
+        "risk_score": 9.8,
+        "mitre": "T1003.001"
+    },
+    {
+        "threat": "Ransomware Execution",
+        "severity": "Critical",
+        "risk_score": 10.0,
+        "mitre": "T1486"
+    },
+    {
+        "threat": "Lateral Movement",
+        "severity": "High",
+        "risk_score": 9.2,
+        "mitre": "T1021"
+    },
+    {
+        "threat": "Persistence",
+        "severity": "High",
+        "risk_score": 8.8,
+        "mitre": "T1547"
+    }
+]
