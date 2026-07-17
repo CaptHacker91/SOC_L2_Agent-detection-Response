@@ -57,29 +57,27 @@ SEV_COLOR = {"Critical":"#ef4444","High":"#f97316","Medium":"#eab308","Low":"#22
 SEV_DOT   = {"Critical":"🔴","High":"🟠","Medium":"🟡","Low":"🟢"}
 SEV_CLS   = {"Critical":"C","High":"H","Medium":"M","Low":"L"}
 
-@st.cache_resource(show_spinner="Loading backend…")
+@st.cache_resource(show_spinner="Loading backend...")
 def load_pipeline():
-    key = os.getenv("GEMINI_API_KEY","")
-    loader   = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl")
-    raw      = loader.load()
-    parsed   = DetectionParser().parse(raw)
-    norm     = DataNormalizer().normalize(parsed)
-    engine = DetectionEngine("rules/detection_rules.json")
-    mapper   = MitreMapper()
-    severity = SeverityEngine()
-    triangle = AlertTriangle()
-    alerts   = []
-    for rec in norm:
-        try:
-            det  = engine.detect(rec)
-            mitre = mapper.map(rec)
-            sev  = severity.evaluate(rec, det)
-            tri  = triangle.analyze(rec, det, mitre, sev)
-            alerts.append({**rec, **det, **mitre, **sev, **tri})
-        except Exception:
-            pass
-    return alerts
+    loader = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl")
+    raw = loader.load()
 
+    parsed = DetectionParser().parse(raw)
+    df = DataNormalizer().normalize(parsed)
+
+    engine = DetectionEngine("rules/detection_rules.json")
+    df = engine.analyze(df)
+
+    # Debug
+    st.subheader("Pipeline Debug")
+    st.write("Rows:", len(df))
+    st.write("Columns:", list(df.columns))
+    st.write(df.head())
+
+    if "final_detection" in df.columns:
+        st.write(df["final_detection"].value_counts())
+
+    return df.to_dict(orient="records")
 def nav():
     st.markdown(f"""{CSS}
     <div class="nav">
