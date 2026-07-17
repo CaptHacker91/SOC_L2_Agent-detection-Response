@@ -56,28 +56,60 @@ input[type=text],textarea,.stTextInput input,.stSelectbox select{background:#111
 SEV_COLOR = {"Critical":"#ef4444","High":"#f97316","Medium":"#eab308","Low":"#22c55e"}
 SEV_DOT   = {"Critical":"🔴","High":"🟠","Medium":"🟡","Low":"🟢"}
 SEV_CLS   = {"Critical":"C","High":"H","Medium":"M","Low":"L"}
-
 @st.cache_resource(show_spinner="Loading backend...")
 def load_pipeline():
+    # -----------------------------
+    # Load Dataset
+    # -----------------------------
     loader = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl")
     raw = loader.load()
 
+    # -----------------------------
+    # Parse Logs
+    # -----------------------------
     parsed = DetectionParser().parse(raw)
+
+    # -----------------------------
+    # Normalize
+    # -----------------------------
     df = DataNormalizer().normalize(parsed)
 
-    engine = DetectionEngine("rules/detection_rules.json")
-    df = engine.analyze(df)
+    # -----------------------------
+    # Detection Engine
+    # -----------------------------
+    detector = DetectionEngine("rules/detection_rules.json")
+    df = detector.analyze(df)
 
-    # Debug
-    st.subheader("Pipeline Debug")
-    st.write("Rows:", len(df))
-    st.write("Columns:", list(df.columns))
+    # -----------------------------
+    # MITRE Mapping
+    # -----------------------------
+    mapper = MitreMapper()
+    df = mapper.map(df)
+
+    # -----------------------------
+    # Severity Calculation
+    # -----------------------------
+    severity = SeverityEngine()
+    df = severity.calculate(df)
+
+    # -----------------------------
+    # Alert Triangle
+    # -----------------------------
+    triangle = AlertTriangle()
+    df = triangle.generate(df)
+
+    # -----------------------------
+    # Debug (optional)
+    # -----------------------------
+    st.write("Loaded Records:", len(df))
     st.write(df.head())
 
-    if "final_detection" in df.columns:
-        st.write(df["final_detection"].value_counts())
+    # -----------------------------
+    # Convert DataFrame → List
+    # -----------------------------
+    alerts = df.to_dict(orient="records")
 
-    return df.to_dict(orient="records")
+    return alerts
 def nav():
     st.markdown(f"""{CSS}
     <div class="nav">
