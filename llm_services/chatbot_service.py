@@ -2,9 +2,7 @@ from google import genai
 
 
 class ChatbotService:
-    """
-    SOC Investigation Chatbot
-    """
+    """   SOC Investigation Chatbot"""
 
     def __init__(self, api_key):
         self.client = genai.Client(api_key=api_key)
