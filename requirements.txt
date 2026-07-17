@@ -6,4 +6,4 @@ google-genai
 requests
 plotly
 streamlit
-google-generativeai
+google-genai
