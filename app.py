@@ -64,7 +64,7 @@ def load_pipeline():
     raw      = loader.load()
     parsed   = DetectionParser().parse(raw)
     norm     = DataNormalizer().normalize(parsed)
-    engine   = DetectionEngine()
+    engine = DetectionEngine("rules/detection_rules.json")
     mapper   = MitreMapper()
     severity = SeverityEngine()
     triangle = AlertTriangle()
