@@ -71,15 +71,23 @@ def load_pipeline():
     return df.to_dict(orient="records")
 
 def nav():
-    st.markdown(f"""{CSS}
+    st.markdown(CSS, unsafe_allow_html=True)
+
+    st.markdown("""
     <div class="nav">
       <div class="nav-left">
         <div class="nav-logo">🛡️</div>
-        <div><div class="nav-title">SOC L2 Agent · Detection & Response</div>
-        <div class="nav-sub">PROTOTYPE V1 · AI-ASSISTED INVESTIGATION PLATFORM</div></div>
+        <div>
+          <div class="nav-title">SOC_L2_Agent-detection-Response</div>
+          <div class="nav-sub">PROTOTYPE V1 · AI-ASSISTED INVESTIGATION PLATFORM</div>
+        </div>
       </div>
-      <div class="live"><div class="dot"></div>LIVE</div>
-    </div>""", unsafe_allow_html=True)
+      <div class="live">
+        <div class="dot"></div>
+        LIVE
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def section(lbl):
     st.markdown(f'<div class="sec"><span class="sec-lbl">{lbl}</span><div class="sec-line"></div></div>', unsafe_allow_html=True)
