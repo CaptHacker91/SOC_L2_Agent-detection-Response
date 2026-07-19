@@ -21,7 +21,7 @@ html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{background:#0
 .nav{display:flex;justify-content:space-between;align-items:center;background:#0f1629;border:1px solid #1e2d4a;border-radius:10px;padding:.7rem 1.2rem;margin-bottom:1.5rem}
 .nav-left{display:flex;align-items:center;gap:.75rem}
 .nav-logo{width:34px;height:34px;background:linear-gradient(135deg,#2563eb,#06b6d4);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem}
-.   nav-title{font-size:.95rem;font-weight:700;letter-spacing:.02em}
+.nav-title{font-size:.95rem;font-weight:700;letter-spacing:.02em}
 .nav-sub{font-size:.65rem;color:#64748b;font-family:'JetBrains Mono',monospace;letter-spacing:.08em}
 .live{display:flex;align-items:center;gap:.4rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:20px;padding:.25rem .7rem;font-size:.68rem;color:#22c55e;font-weight:700}
 .dot{width:6px;height:6px;background:#22c55e;border-radius:50%;animation:blink 2s infinite}
