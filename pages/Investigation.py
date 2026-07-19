@@ -1,6 +1,6 @@
 import streamlit as st, os
 from dotenv import load_dotenv
-from llm_services.chatbot_service import ChatbotService
+from services.chatbot_service import ChatbotService
 
 load_dotenv()
 st.set_page_config(page_title="Investigation | SOC L2", page_icon="🔍", layout="wide")
