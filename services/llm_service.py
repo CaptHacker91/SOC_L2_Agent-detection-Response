@@ -13,12 +13,11 @@ class LLMService:
     - Remediation
     """
 
-    def __init__(self, api_key):
-        genai.configure(api_key=api_key)
-
-        self.model = genai.GenerativeModel(
-            "gemini-2.5-flash"
-        )
+   def __init__(self, api_key):
+    self.client = genai.Client(api_key=api_key)
+    self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    self.last_request = 0
+    self.min_interval = 3
 
     def investigate(self, alert):
 
