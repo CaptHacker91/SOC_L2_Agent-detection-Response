@@ -1,4 +1,6 @@
 from google import genai
+import os
+import time
 
 
 class LLMService:
@@ -13,27 +15,29 @@ class LLMService:
     - Remediation
     """
 
-   def __init__(self, api_key):
-    self.client = genai.Client(api_key=api_key)
-    self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-    self.last_request = 0
-    self.min_interval = 3
+    def __init__(self, api_key):
+        self.client = genai.Client(api_key=api_key)
+        def __init__(self, api_key):
+            self.client = genai.Client(api_key=api_key)
+            self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+            self.last_request = 0
+            self.min_interval = 3
 
-    def investigate(self, alert):
+        def investigate(self, alert):
 
-        prompt = self._build_prompt(alert)
+            prompt = self._build_prompt(alert)
 
-        response = self.model.generate_content(
-            prompt
-        )
+            # Use the genai client to generate content from the model
+            response = self.client.generate_content(
+                model=self.model,
+                prompt=prompt,
+            )
 
-        return response.text
+            return response.text
 
-    def _build_prompt(self, alert):
+        def _build_prompt(self, alert):
 
-        return f"""
-You are an experienced SOC Level 2 Analyst.
-
+            return f"""
 Analyze the following security alert.
 
 Threat:
