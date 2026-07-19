@@ -9,7 +9,7 @@ from engine.severity_engine import SeverityEngine
 from engine.alert_triangle import AlertTriangle
 
 load_dotenv()
-st.set_page_config(page_title="SOC L2 Agent", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="SOC_L2_Agent-detection-Response", page_icon="🛡️", layout="wide")
 
 CSS = """
 <style>
@@ -75,7 +75,7 @@ def nav():
     <div class="nav">
       <div class="nav-left">
         <div class="nav-logo">🛡️</div>
-        <div><div class="nav-title">SOC L2 Agent · Detection & Response</div>
+        <div><div class="nav-title">SOC_L2_Agent-detection-Response · Detection & Response</div>
         <div class="nav-sub">PROTOTYPE V1 · AI-ASSISTED INVESTIGATION PLATFORM</div></div>
       </div>
       <div class="live"><div class="dot"></div>LIVE</div>
