@@ -1,111 +1,89 @@
 import os
 import time
-from google import genai
+from groq import Groq
 
 
 class ChatbotService:
-    """SOC Investigation Chatbot"""
+    """SOC Investigation Chatbot — Groq Llama 3.3 70B"""
 
-    def __init__(self, api_key):
-        self.client = genai.Client(api_key=api_key)
-        self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    MODEL = "llama-3.3-70b-versatile"  # 14400 req/day FREE
+
+    def __init__(self, api_key: str):
+        self.client       = Groq(api_key=api_key)
         self.last_request = 0
-        self.min_interval = 3  # seconds
+        self.min_interval = 2  # seconds between requests
 
-    def ask(self, question, alert, logs):
+    def ask(self, question: str, alert: dict, logs: str) -> str:
 
-        now = time.time()
+        # Rate-limit guard
+        wait = self.min_interval - (time.time() - self.last_request)
+        if wait > 0:
+            return f"⏳ Please wait {round(wait, 1)}s before sending another request."
 
-        if now - self.last_request < self.min_interval:
-            wait = round(self.min_interval - (now - self.last_request), 1)
-            return f"⏳ Please wait {wait} seconds before sending another request."
-
-        self.last_request = now
-
-        prompt = f"""
-You are an experienced SOC Level-2 Incident Response Analyst.
-
-Analyze ONLY the information provided below.
-
-========================
-SECURITY ALERT
-========================
-
-Threat:
-{alert.get("threat")}
-
-Severity:
-{alert.get("severity")}
-
-Risk Score:
-{alert.get("risk_score")}
-
-Detection:
-{alert.get("final_detection")}
-
-MITRE Technique:
-{alert.get("mapped_technique")}
-
-MITRE Tactic:
-{alert.get("mitre_tactic")}
-
-Business Impact:
-{alert.get("business_impact")}
-
-Investigation Priority:
-{alert.get("investigation_priority")}
-
-========================
-ASSOCIATED LOGS
-========================
-
-{logs}
-
-========================
-ANALYST QUESTION
-========================
-
-{question}
-
-Respond in this format:
-
-1. Executive Summary
-2. Threat Explanation
-3. Root Cause Analysis
-4. MITRE ATT&CK Explanation
-5. Business Impact
-6. Investigation Steps
-7. Containment Recommendations
-8. Remediation Steps
-9. Confidence Level
-
-Rules:
-- Do NOT invent information.
-- Base every conclusion only on the supplied alert and logs.
-- Keep the response concise and professional.
-"""
+        self.last_request = time.time()
 
         try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt,
+            response = self.client.chat.completions.create(
+                model=self.MODEL,
+                messages=[
+                    {"role": "system", "content": self._system()},
+                    {"role": "user",   "content": self._prompt(question, alert, logs)},
+                ],
+                max_tokens=1024,
+                temperature=0.3,
             )
+            return response.choices[0].message.content
 
-            return response.text
-
-        except Exception as error:
-            msg = str(error)
-
-            if "404" in msg or "NOT_FOUND" in msg:
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "rate_limit" in msg.lower():
                 return (
-                    f"❌ Model '{self.model}' not found.\n"
-                    "Update GEMINI_MODEL in your .env file."
+                    "⚠️ Groq rate limit hit. Please wait 30 seconds and try again.\n\n"
+                    "Groq free tier: **14,400 requests/day** — very generous, rare to hit."
                 )
+            if "401" in msg or "invalid_api_key" in msg.lower():
+                return "❌ Invalid Groq API key. Check GROQ_API_KEY in your .env file."
+            return f"❌ Groq Error: {msg}"
 
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                return (
-                    "⚠️ Gemini API rate limit exceeded.\n"
-                    "Please wait a minute and try again."
-                )
+    # ── Helpers ────────────────────────────────────────────────────────────────
+    def _system(self) -> str:
+        return (
+            "You are an expert SOC Level-2 Incident Response Analyst. "
+            "Analyze only the provided alert data. "
+            "Never invent IPs, usernames, or details not present in the alert. "
+            "Be concise, structured, and actionable."
+        )
 
-            return f"Gemini API Error: {msg}"
+    def _prompt(self, question: str, alert: dict, logs: str) -> str:
+        return f"""
+SECURITY ALERT
+══════════════
+Threat              : {alert.get("threat")}
+Severity            : {alert.get("severity")} | Risk Score: {alert.get("risk_score")}/10
+Detection           : {alert.get("final_detection")}
+MITRE Technique     : {alert.get("mapped_technique")}
+MITRE Tactic        : {alert.get("mitre_tactic")}
+Context             : {alert.get("context")}
+Business Impact     : {alert.get("business_impact")}
+Investigation Prio  : {alert.get("investigation_priority")}
+
+ASSOCIATED LOGS
+═══════════════
+{logs}
+
+ANALYST QUESTION
+════════════════
+{question}
+
+Respond with these sections (keep each section 2-4 lines):
+
+**1. Executive Summary**
+**2. Threat Explanation**
+**3. Root Cause Analysis**
+**4. MITRE ATT&CK Explanation**
+**5. Business Impact**
+**6. Investigation Steps**
+**7. Containment Recommendations**
+**8. Remediation Steps**
+**9. Confidence Level** (High / Medium / Low + reason)
+"""
