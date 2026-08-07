@@ -1,6 +1,6 @@
 import streamlit as st, os
 from dotenv import load_dotenv
-from services.chatbot_service import ChatbotService
+from services.groq_service import GroqService
 
 load_dotenv()
 st.set_page_config(page_title="Investigation | SOC L2", page_icon="🔍", layout="wide")
@@ -47,7 +47,7 @@ SEV_DOT = {"Critical":"🔴","High":"🟠","Medium":"🟡","Low":"🟢"}
 
 @st.cache_resource
 def get_chatbot():
-    return ChatbotService(os.getenv("GEMINI_API_KEY", ""))
+    return GroqService(os.getenv("GROQ_API_KEY", ""))
 
 def section(lbl):
     st.markdown(f'<div class="sec"><span class="sec-lbl">{lbl}</span><div class="sec-line"></div></div>', unsafe_allow_html=True)
@@ -148,8 +148,8 @@ def main():
         st.session_state.chat_history.append({"role": "user", "content": q.strip()})
         with st.spinner("SOC AI analysing…"):
             try:
-                # ChatbotService.ask(question, alert_dict, logs_string)
-                reply = get_chatbot().ask(q.strip(), a, logs)
+                # GroqService.investigate(alert_dict)
+                reply = get_chatbot().investigate(a)
             except Exception as e:
                 reply = f"Error: {e}"
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
