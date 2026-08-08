@@ -2,8 +2,8 @@ pandas
 numpy
 scikit-learn
 python-dotenv
-google-genai
+groq
 requests
 plotly
 streamlit
-google-genai
+

@@ -1,85 +1,70 @@
-from google import genai
 import os
-import time
+from groq import Groq
 
 
 class LLMService:
-    """
-    AI Investigation Service
+    """One-shot investigation report — Groq Llama 3.3 70B"""
 
-    Generates:
-    - Executive Summary
-    - Root Cause Analysis
-    - Threat Impact
-    - Containment
-    - Remediation
-    """
+    MODEL = "llama-3.3-70b-versatile"
 
-    def __init__(self, api_key):
-        self.client = genai.Client(api_key=api_key)
-        def __init__(self, api_key):
-            self.client = genai.Client(api_key=api_key)
-            self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-            self.last_request = 0
-            self.min_interval = 3
+    def __init__(self, api_key: str):
+        self.client = Groq(api_key=api_key)
 
-        def investigate(self, alert):
-
-            prompt = self._build_prompt(alert)
-
-            # Use the genai client to generate content from the model
-            response = self.client.generate_content(
-                model=self.model,
-                prompt=prompt,
+    def investigate(self, alert: dict) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.MODEL,
+                messages=[
+                    {"role": "system", "content": self._system()},
+                    {"role": "user",   "content": self._prompt(alert)},
+                ],
+                max_tokens=1500,
+                temperature=0.3,
             )
+            return response.choices[0].message.content
 
-            return response.text
+        except Exception as e:
+            msg = str(e)
+            if "429" in msg or "rate_limit" in msg.lower():
+                return (
+                    "⚠️ Groq rate limit hit. Please wait 30 seconds.\n\n"
+                    "Groq free tier allows **14,400 requests/day**."
+                )
+            if "401" in msg or "invalid_api_key" in msg.lower():
+                return "❌ Invalid Groq API key. Check GROQ_API_KEY in your .env file."
+            return f"❌ Groq Error: {msg}"
 
-        def _build_prompt(self, alert):
+    def _system(self) -> str:
+        return (
+            "You are an expert SOC Level-2 Security Analyst. "
+            "Generate a complete, structured investigation report. "
+            "Use only the data provided. Never invent details."
+        )
 
-            return f"""
-Analyze the following security alert.
+    def _prompt(self, alert: dict) -> str:
+        return f"""
+Generate a full SOC investigation report for this security alert.
 
-Threat:
-{alert.get("threat")}
+ALERT DETAILS
+═════════════
+Threat              : {alert.get("threat")}
+Severity            : {alert.get("severity")} | Risk Score: {alert.get("risk_score")}/10
+Detection           : {alert.get("final_detection")}
+MITRE Technique     : {alert.get("mapped_technique")}
+MITRE Tactic        : {alert.get("mitre_tactic")}
+Context             : {alert.get("context")}
+Business Impact     : {alert.get("business_impact")}
+Investigation Prio  : {alert.get("investigation_priority")}
+Signature           : {alert.get("signature")}
+Detection Tool      : {alert.get("tool")}
 
-Detection Status:
-{alert.get("final_detection")}
+Write a professional report with these sections:
 
-MITRE Technique:
-{alert.get("mapped_technique")}
-
-MITRE Tactic:
-{alert.get("mitre_tactic")}
-
-SOC Risk Score:
-{alert.get("risk_score")}
-
-Severity:
-{alert.get("severity")}
-
-Context:
-{alert.get("context")}
-
-Business Impact:
-{alert.get("business_impact")}
-
-Investigation Priority:
-{alert.get("investigation_priority")}
-
-Provide:
-
-1. Executive Summary
-
-2. Root Cause Analysis
-
-3. Threat Impact
-
-4. Investigation Steps
-
-5. Containment
-
-6. Remediation
-
-7. SOC Analyst Notes
+## 1. Executive Summary
+## 2. Root Cause Analysis
+## 3. For the Developer 👨‍💻
+## 4. For the Business 💼
+## 5. For the SOC Analyst 🔍
+## 6. Mitigation Steps
+## 7. Detection Improvement
 """

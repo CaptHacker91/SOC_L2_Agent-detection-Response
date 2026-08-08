@@ -6,7 +6,7 @@ from groq import Groq
 class ChatbotService:
     """SOC Investigation Chatbot — Groq Llama 3.3 70B"""
 
-    MODEL = "llama-3.3-70b-versatile"  # 14400 req/day FREE
+    MODEL = "llama-3.3-70b-versatile"  # 14400 req/day FREE masze karo
 
     def __init__(self, api_key: str):
         self.client       = Groq(api_key=api_key)
