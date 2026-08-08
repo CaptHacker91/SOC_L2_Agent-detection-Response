@@ -4,21 +4,19 @@ from groq import Groq
 
 
 class ChatbotService:
-    """SOC Investigation Chatbot — Groq Llama 3.3 70B"""
+    """SOC Investigation Chatbot — Groq Llama 3.3 70B (14400 req/day FREE)"""
 
-    MODEL = "llama-3.3-70b-versatile"  # 14400 req/day FREE masze karo
+    MODEL = "llama-3.3-70b-versatile"
 
     def __init__(self, api_key: str):
         self.client       = Groq(api_key=api_key)
         self.last_request = 0
-        self.min_interval = 2  # seconds between requests
+        self.min_interval = 2
 
     def ask(self, question: str, alert: dict, logs: str) -> str:
-
-        # Rate-limit guard
         wait = self.min_interval - (time.time() - self.last_request)
         if wait > 0:
-            return f"⏳ Please wait {round(wait, 1)}s before sending another request."
+            return f"⏳ Please wait {round(wait,1)}s before sending another request."
 
         self.last_request = time.time()
 
@@ -37,15 +35,11 @@ class ChatbotService:
         except Exception as e:
             msg = str(e)
             if "429" in msg or "rate_limit" in msg.lower():
-                return (
-                    "⚠️ Groq rate limit hit. Please wait 30 seconds and try again.\n\n"
-                    "Groq free tier: **14,400 requests/day** — very generous, rare to hit."
-                )
+                return "⚠️ Groq rate limit hit. Please wait 30 seconds and try again."
             if "401" in msg or "invalid_api_key" in msg.lower():
                 return "❌ Invalid Groq API key. Check GROQ_API_KEY in your .env file."
             return f"❌ Groq Error: {msg}"
 
-    # ── Helpers ────────────────────────────────────────────────────────────────
     def _system(self) -> str:
         return (
             "You are an expert SOC Level-2 Incident Response Analyst. "
@@ -58,14 +52,14 @@ class ChatbotService:
         return f"""
 SECURITY ALERT
 ══════════════
-Threat              : {alert.get("threat")}
-Severity            : {alert.get("severity")} | Risk Score: {alert.get("risk_score")}/10
-Detection           : {alert.get("final_detection")}
-MITRE Technique     : {alert.get("mapped_technique")}
-MITRE Tactic        : {alert.get("mitre_tactic")}
-Context             : {alert.get("context")}
-Business Impact     : {alert.get("business_impact")}
-Investigation Prio  : {alert.get("investigation_priority")}
+Threat             : {alert.get("threat")}
+Severity           : {alert.get("severity")} | Risk Score: {alert.get("risk_score")}/10
+Detection          : {alert.get("final_detection")}
+MITRE Technique    : {alert.get("mapped_technique")}
+MITRE Tactic       : {alert.get("mitre_tactic")}
+Context            : {alert.get("context")}
+Business Impact    : {alert.get("business_impact")}
+Investigation Prio : {alert.get("investigation_priority")}
 
 ASSOCIATED LOGS
 ═══════════════
@@ -75,7 +69,7 @@ ANALYST QUESTION
 ════════════════
 {question}
 
-Respond with these sections (keep each section 2-4 lines):
+Respond with these sections (2-4 lines each):
 
 **1. Executive Summary**
 **2. Threat Explanation**
