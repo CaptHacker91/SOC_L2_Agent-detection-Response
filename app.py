@@ -9,54 +9,107 @@ from engine.severity_engine import SeverityEngine
 from engine.alert_triangle import AlertTriangle
 
 load_dotenv()
-st.set_page_config(page_title="SOC L2 Agent", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="SOAK Agent | Blue Team Defence", page_icon="🛡️", layout="wide")
 
+# ── Dashboard CSS — SOAK Agent olive/brown/rose theme ─────────────────────────
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{background:#0a0e1a!important;color:#e2e8f0!important;font-family:'Inter',sans-serif!important}
+
+:root{
+  --olive:#6b8e23;--olive-dark:#4f6428;--olive-light:#dce8c4;
+  --rose:rosybrown;--rose-light:#ead8d5;
+  --gray:gray;--gray-light:#dedede;
+  --brown:saddlebrown;--brown-dark:#5a2f18;--brown-light:#ead8c8;
+  --background:#eee8dc;--paper:#fffdf8;--dark:#2f3e2f;
+}
+
+html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{
+  background:var(--background)!important;
+  color:var(--dark)!important;
+  font-family:'Segoe UI',Arial,sans-serif!important;
+}
 [data-testid="stHeader"],[data-testid="stToolbar"],footer,#MainMenu{display:none!important}
-.block-container{padding:1.2rem 2rem!important;max-width:100%!important}
-.nav{display:flex;justify-content:space-between;align-items:center;background:#0f1629;border:1px solid #1e2d4a;border-radius:10px;padding:.7rem 1.2rem;margin-bottom:1.5rem}
-.nav-left{display:flex;align-items:center;gap:.75rem}
-.nav-logo{width:34px;height:34px;background:linear-gradient(135deg,#2563eb,#06b6d4);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem}
-.nav-title{font-size:.95rem;font-weight:700;letter-spacing:.02em}
-.nav-sub{font-size:.65rem;color:#64748b;font-family:'JetBrains Mono',monospace;letter-spacing:.08em}
-.live{display:flex;align-items:center;gap:.4rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:20px;padding:.25rem .7rem;font-size:.68rem;color:#22c55e;font-weight:700}
-.dot{width:6px;height:6px;background:#22c55e;border-radius:50%;animation:blink 2s infinite}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
-.sec{display:flex;align-items:center;gap:.6rem;margin:1.2rem 0 .8rem}
-.sec-lbl{font-size:.65rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#06b6d4;font-family:'JetBrains Mono',monospace;white-space:nowrap}
-.sec-line{flex:1;height:1px;background:linear-gradient(90deg,#1a3a6b,transparent)}
-.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.8rem;margin-bottom:.5rem}
-.kpi{background:#111827;border:1px solid #1e2d4a;border-radius:10px;padding:1rem 1.1rem;position:relative;overflow:hidden}
-.kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--c)}
-.kpi-val{font-size:1.8rem;font-weight:700;color:var(--c);font-family:'JetBrains Mono',monospace;line-height:1;margin:.3rem 0 .2rem}
-.kpi-lbl{font-size:.68rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.1em}
-.card{background:#111827;border:1px solid #1e2d4a;border-left:3px solid var(--ac,#2563eb);border-radius:10px;padding:.9rem 1.1rem;margin-bottom:.65rem}
-.card:hover{background:#151f35}
-.card-hdr{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.55rem}
-.threat{font-size:.86rem;font-weight:600;flex:1;line-height:1.35}
-.ts{font-size:.62rem;color:#475569;font-family:'JetBrains Mono',monospace;white-space:nowrap;margin-top:2px}
-.meta{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;margin-bottom:.55rem}
-.badge{display:inline-flex;align-items:center;gap:.25rem;padding:.18rem .6rem;border-radius:20px;font-size:.63rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;border:1px solid}
-.C{color:#ef4444;background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3)}
-.H{color:#f97316;background:rgba(249,115,22,.1);border-color:rgba(249,115,22,.3)}
-.M{color:#eab308;background:rgba(234,179,8,.1);border-color:rgba(234,179,8,.3)}
-.L{color:#22c55e;background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.3)}
-.chip{font-size:.66rem;color:#64748b;font-family:'JetBrains Mono',monospace;background:#0f1629;padding:.18rem .5rem;border-radius:5px;border:1px solid #1e2d4a}
-.det{font-size:.73rem;color:#64748b;line-height:1.5;padding-left:.5rem;border-left:2px solid #1a3a6b;margin-bottom:.6rem}
-div[data-testid="stButton"]>button{background:linear-gradient(135deg,#2563eb,#1d4ed8)!important;color:#fff!important;border:none!important;border-radius:7px!important;padding:.32rem 1rem!important;font-size:.72rem!important;font-weight:600!important;box-shadow:0 2px 8px rgba(37,99,235,.4)!important}
+.block-container{padding:0!important;max-width:100%!important}
+
+/* ── Header ── */
+.soak-header{
+  background:linear-gradient(135deg,#4f6428 0%,#6b8e23 48%,saddlebrown 100%);
+  color:white;padding:28px 25px 22px;text-align:center;
+  box-shadow:0 6px 18px rgba(60,40,20,0.25);position:relative;overflow:hidden;
+  margin-bottom:24px;
+}
+.soak-header h1{margin:0;font-size:34px;font-weight:800;letter-spacing:.5px}
+.soak-header p{margin-top:8px;font-size:15px;opacity:.92}
+.header-deco{font-size:20px;letter-spacing:12px;margin-bottom:8px;opacity:.8}
+
+/* ── KPI cards ── */
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;padding:0 24px;margin-bottom:20px}
+.kpi{background:var(--paper);padding:20px;border-radius:18px;text-align:center;
+  box-shadow:0 6px 17px rgba(65,50,35,.14);transition:.3s;border-top:6px solid var(--c,#6b8e23)}
+.kpi:hover{transform:translateY(-5px);box-shadow:0 10px 24px rgba(65,50,35,.2)}
+.kpi-icon{font-size:28px;margin-bottom:6px}
+.kpi-val{font-size:34px;font-weight:800;color:var(--c,#6b8e23);font-family:'JetBrains Mono',monospace}
+.kpi-lbl{font-size:13px;font-weight:700;color:var(--brown);margin-top:4px}
+
+/* ── Section heading ── */
+.sec-heading{color:var(--olive-dark);font-size:22px;font-weight:800;
+  border-bottom:3px solid rosybrown;padding-bottom:10px;margin:20px 24px 14px}
+
+/* ── Alert card ── */
+.alert-card{
+  background:var(--paper);border-radius:16px;padding:16px 18px;margin:0 24px 14px;
+  box-shadow:0 5px 14px rgba(65,50,35,.12);
+  border-left:5px solid var(--ac,#6b8e23);transition:.25s;cursor:pointer;
+}
+.alert-card:hover{transform:translateX(4px);box-shadow:0 8px 20px rgba(65,50,35,.2)}
+.ac-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.ac-threat{font-size:15px;font-weight:700;color:var(--dark)}
+.ac-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.ac-det{font-size:12px;color:#666;border-left:2px solid #ccc;padding-left:8px}
+
+/* ── Badges & chips ── */
+.badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;
+  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid}
+.sev-C{color:#8b0000;background:#ffe0e0;border-color:#ffaaaa}
+.sev-H{color:#7a3b00;background:#fff0d8;border-color:#ffcc88}
+.sev-M{color:#5a4a00;background:#fff8d8;border-color:#ffe066}
+.sev-L{color:#2a5a2a;background:#e0f5e0;border-color:#88cc88}
+.chip{font-size:11px;color:#7a5a3a;font-family:'JetBrains Mono',monospace;
+  background:#f0ebe3;padding:3px 8px;border-radius:6px;border:1px solid #ddd5c8}
+
+/* ── Search / filter bar ── */
+.ctrl-bar{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;padding:0 24px;margin-bottom:14px}
+
+/* ── Streamlit overrides ── */
+div[data-testid="stButton"]>button{
+  background:linear-gradient(135deg,#4f6428,#6b8e23)!important;color:#fff!important;
+  border:none!important;border-radius:8px!important;padding:.3rem .9rem!important;
+  font-size:.72rem!important;font-weight:700!important;
+  box-shadow:0 2px 8px rgba(79,100,40,.4)!important;
+}
 div[data-testid="stButton"]>button:hover{opacity:.88!important;transform:translateY(-1px)!important}
-input[type=text],textarea,.stTextInput input{background:#111827!important;border:1px solid #1e2d4a!important;color:#e2e8f0!important;border-radius:8px!important;font-size:.8rem!important}
-::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-thumb{background:#1a3a6b;border-radius:3px}
-</style>"""
+input[type=text],.stTextInput input{
+  background:#fffdf8!important;border:2px solid #d5cec2!important;
+  color:var(--dark)!important;border-radius:10px!important;font-size:.82rem!important}
+.stSelectbox>div>div{
+  background:#fffdf8!important;border:2px solid #d5cec2!important;border-radius:10px!important}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:#b5a898;border-radius:4px}
 
-SEV_COLOR = {"Critical":"#ef4444","High":"#f97316","Medium":"#eab308","Low":"#22c55e"}
+/* ── Footer ── */
+.soak-footer{text-align:center;padding:28px;color:var(--brown);font-weight:700;
+  border-top:2px solid #ddd5c8;margin-top:24px}
+.soak-footer small{color:var(--gray);font-size:12px}
+</style>
+"""
+
+SEV_COLOR = {"Critical":"#cc2222","High":"#b86000","Medium":"#a08000","Low":"#2a7a2a"}
+SEV_CLS   = {"Critical":"sev-C","High":"sev-H","Medium":"sev-M","Low":"sev-L"}
 SEV_DOT   = {"Critical":"🔴","High":"🟠","Medium":"🟡","Low":"🟢"}
-SEV_CLS   = {"Critical":"C","High":"H","Medium":"M","Low":"L"}
 
+# ── Pipeline ───────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Running detection pipeline…")
 def load_pipeline():
     raw    = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl").load()
@@ -66,103 +119,116 @@ def load_pipeline():
     df     = MitreMapper().map(df)
     df     = SeverityEngine().calculate(df)
     df     = AlertTriangle().generate(df)
-    # Only surface actual detections — drop "Normal" rows
     df     = df[df["final_detection"] != "Normal"].reset_index(drop=True)
     return df.to_dict(orient="records")
 
-def nav():
-    st.markdown(CSS, unsafe_allow_html=True)
+# ── Header ─────────────────────────────────────────────────────────────────────
+def render_header():
+    st.markdown(f"""{CSS}
+    <div class="soak-header">
+      <div class="header-deco">✦ ✧ ✦ ✧ ✦</div>
+      <h1>🛡️ SOAK Agent</h1>
+      <p>Blue Team Defence Intelligence Dashboard · SOC L2 AI Investigation Platform</p>
+    </div>""", unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="nav">
-      <div class="nav-left">
-        <div class="nav-logo">🛡️</div>
-        <div>
-          <div class="nav-title">SOC_L2_Agent-detection-Response</div>
-          <div class="nav-sub">PROTOTYPE V1 · AI-ASSISTED INVESTIGATION PLATFORM</div>
-        </div>
-      </div>
-      <div class="live">
-        <div class="dot"></div>
-        LIVE
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def section(lbl):
-    st.markdown(f'<div class="sec"><span class="sec-lbl">{lbl}</span><div class="sec-line"></div></div>', unsafe_allow_html=True)
-
-def kpi_cards(alerts):
-    sev = lambda s: sum(1 for a in alerts if a.get("severity","") == s)
-    defs = [
-        ("Total Alerts", len(alerts),    "#2563eb", "📋"),
-        ("Critical",     sev("Critical"),"#ef4444", "🔴"),
-        ("High",         sev("High"),    "#f97316", "🟠"),
-        ("Medium",       sev("Medium"),  "#eab308", "🟡"),
-        ("Low",          sev("Low"),     "#22c55e", "🟢"),
+# ── KPI cards ──────────────────────────────────────────────────────────────────
+def render_kpis(alerts):
+    sev = lambda s: sum(1 for a in alerts if a.get("severity") == s)
+    cards = [
+        ("📋", len(alerts),    "#4f6428", "Total Alerts"),
+        ("🔴", sev("Critical"),"#cc2222", "Critical"),
+        ("🟠", sev("High"),    "#b86000", "High"),
+        ("🟡", sev("Medium"),  "#a08000", "Medium"),
+        ("🟢", sev("Low"),     "#2a7a2a", "Low"),
     ]
-    html = "".join(f'<div class="kpi" style="--c:{c}"><div style="font-size:1.1rem">{ic}</div><div class="kpi-val">{v}</div><div class="kpi-lbl">{l}</div></div>' for l,v,c,ic in defs)
+    html = "".join(
+        f'<div class="kpi" style="--c:{c}">'
+        f'<div class="kpi-icon">{ic}</div>'
+        f'<div class="kpi-val">{v}</div>'
+        f'<div class="kpi-lbl">{l}</div></div>'
+        for ic,v,c,l in cards
+    )
     st.markdown(f'<div class="kpi-grid">{html}</div>', unsafe_allow_html=True)
 
-def alert_card(a, idx):
-    sev    = a.get("severity", "Low")
-    ac     = SEV_COLOR.get(sev, "#2563eb")
-    cls    = SEV_CLS.get(sev, "L")
-    dot    = SEV_DOT.get(sev, "⚪")
-    tech   = a.get("mapped_technique", "—")
-    tactic = a.get("mitre_tactic", "—")
-    risk   = a.get("risk_score", "N/A")
-    det    = a.get("final_detection", "—")
-    threat = a.get("threat", "Unknown Threat")
-    tool   = a.get("tool", "—")
+# ── Alert card ─────────────────────────────────────────────────────────────────
+def render_alert_card(a, idx):
+    sev    = a.get("severity","Low")
+    ac     = SEV_COLOR.get(sev,"#6b8e23")
+    cls    = SEV_CLS.get(sev,"sev-L")
+    dot    = SEV_DOT.get(sev,"⚪")
+    threat = a.get("threat","Unknown")
+    tech   = a.get("mapped_technique","—")
+    tactic = a.get("mitre_tactic","—")
+    risk   = a.get("risk_score","—")
+    det    = a.get("final_detection","—")
+    sub    = a.get("mitre_sub_name","")
+    tool   = a.get("tool","—")
+
     st.markdown(f"""
-    <div class="card" style="--ac:{ac}">
-      <div class="card-hdr">
-        <div class="threat">{threat}</div>
+    <div class="alert-card" style="--ac:{ac}">
+      <div class="ac-header">
+        <div class="ac-threat">{threat}</div>
         <span class="chip">via {tool}</span>
       </div>
-      <div class="meta">
+      <div class="ac-meta">
         <span class="badge {cls}">{dot} {sev}</span>
         <span class="chip">Risk: {risk}</span>
         <span class="chip">MITRE {tech}</span>
         <span class="chip">🎯 {tactic}</span>
+        <span class="chip">📋 {det}</span>
       </div>
-      <div class="det">{det}</div>
+      <div class="ac-det">{sub}</div>
     </div>""", unsafe_allow_html=True)
-    _, col = st.columns([6, 1])
+
+    _, col = st.columns([5, 1])
     with col:
         if st.button("🔍 Investigate", key=f"inv_{idx}"):
             st.session_state.selected_alert = a
+            st.session_state.chat_history   = []
             st.switch_page("pages/Investigation.py")
 
+# ── Main ───────────────────────────────────────────────────────────────────────
 def main():
-    nav()
+    render_header()
     alerts = load_pipeline()
 
     if not alerts:
-        st.error("No alerts generated. Check your dataset or backend.")
+        st.error("No alerts generated.")
         return
 
-    section("KEY METRICS")
-    kpi_cards(alerts)
+    render_kpis(alerts)
 
-    section("ALERT QUEUE")
-    c1, c2, c3 = st.columns([1.5, 1.5, 3])
-    sevs   = ["All"] + [s for s in ["Critical","High","Medium","Low"] if any(a.get("severity") == s for a in alerts)]
-    sf     = c1.selectbox("Severity", sevs, label_visibility="collapsed")
-    search = c3.text_input("", placeholder="🔍  Search threats, techniques…", label_visibility="collapsed")
+    st.markdown('<div class="sec-heading">🔍 Alert Queue</div>', unsafe_allow_html=True)
 
-    filtered = [a for a in alerts if
-        (sf == "All" or a.get("severity") == sf) and
-        (not search or search.lower() in str(a).lower())]
+    # Filters
+    c1, c2, c3 = st.columns([2, 1, 1])
+    search  = c1.text_input("", placeholder="🔍 Search threats, techniques, tools…", label_visibility="collapsed")
+    sevs    = ["All"] + [s for s in ["Critical","High","Medium","Low"] if any(a.get("severity")==s for a in alerts)]
+    sf      = c2.selectbox("Severity", sevs, label_visibility="collapsed")
+    tactics = ["All Tactics"] + sorted({a.get("mitre_tactic","?") for a in alerts if a.get("mitre_tactic") not in ("Unknown","")})
+    tf      = c3.selectbox("Tactic", tactics, label_visibility="collapsed")
 
-    st.markdown(f'<div style="font-size:.7rem;color:#64748b;margin-bottom:.6rem;font-family:JetBrains Mono,monospace">Showing <b style="color:#e2e8f0">{len(filtered)}</b> / {len(alerts)} alerts</div>', unsafe_allow_html=True)
+    filtered = [
+        a for a in alerts if
+        (sf=="All" or a.get("severity")==sf) and
+        (tf=="All Tactics" or a.get("mitre_tactic")==tf) and
+        (not search or search.lower() in str(a).lower())
+    ]
 
-    if not filtered:
-        st.info("No alerts match the current filters.")
-    else:
-        for i, a in enumerate(filtered):
-            alert_card(a, i)
+    st.markdown(
+        f'<div style="font-size:12px;color:#7a5a3a;margin:0 24px 10px;font-family:JetBrains Mono,monospace">'
+        f'Showing <b>{len(filtered)}</b> / {len(alerts)} alerts</div>',
+        unsafe_allow_html=True
+    )
+
+    for i, a in enumerate(filtered):
+        render_alert_card(a, i)
+
+    st.markdown("""
+    <div class="soak-footer">
+      🛡️ SOAK Agent · Blue Team Defence Intelligence Dashboard
+      <br><small>Developed by Drashya Desai · Helee Mistry · Tanmay Pramar</small>
+    </div>""", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
