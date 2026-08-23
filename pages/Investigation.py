@@ -120,13 +120,15 @@ html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{
   border-radius:6px;display:inline-block}
 
 /* Buttons */
-div[data-testid="stButton"]>button{
+div[data-testid="stButton"]>button, div[data-testid="stDownloadButton"]>button{
   background:linear-gradient(135deg,#4f6428,#6b8e23)!important;color:#fff!important;
   border:none!important;border-radius:8px!important;padding:.3rem .9rem!important;
   font-size:.72rem!important;font-weight:700!important;
   box-shadow:0 2px 8px rgba(79,100,40,.4)!important;
 }
-div[data-testid="stButton"]>button:hover{opacity:.88!important;transform:translateY(-1px)!important}
+div[data-testid="stButton"]>button:hover, div[data-testid="stDownloadButton"]>button:hover{
+  opacity:.88!important;transform:translateY(-1px)!important
+}
 input[type=text],.stTextInput input{
   background:#fffdf8!important;border:2px solid #d5cec2!important;
   color:var(--dark)!important;border-radius:10px!important;font-size:.82rem!important}
@@ -230,26 +232,33 @@ def main():
       <span class="badge {cls}" style="font-size:13px;padding:6px 14px">{dot} {sev}</span>
     </div>""", unsafe_allow_html=True)
 
+    # ── FIX: PDF Download Section ─────────────────────────────────────────────
     col_back, col_pdf, _ = st.columns([1, 1.5, 7])
     with col_back:
         if st.button("← Dashboard"):
             st.switch_page("app.py")
+    
     with col_pdf:
-        if st.button("📄 Download PDF Report"):
-            ai_summary = ""
-            if st.session_state.get("chat_history"):
-                ai_summary = "\n\n".join(
-                    f"Q: {m['content']}" if m["role"] == "user"
-                    else f"A: {m['content']}"
-                    for m in st.session_state.chat_history
-                )
+        # Pura data aur bytes pehle prepare kar lo
+        ai_summary = ""
+        if st.session_state.get("chat_history"):
+            ai_summary = "\n\n".join(
+                f"Q: {m['content']}" if m["role"] == "user"
+                else f"A: {m['content']}"
+                for m in st.session_state.chat_history
+            )
+        
+        try:
             pdf_bytes = generate_pdf(a, ai_summary)
+            # Seedha download button use karo, without nesting inside st.button!
             st.download_button(
-                label="💾 Save PDF",
+                label="📄 Download PDF Report",
                 data=pdf_bytes,
                 file_name=f"SOC_Report_{inc_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
                 mime="application/pdf",
             )
+        except Exception as e:
+            st.error(f"Failed to generate PDF: {e}")
 
     # ── 1. Incident Metadata ─────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">📋 Incident Metadata</div>', unsafe_allow_html=True)
@@ -301,29 +310,28 @@ def main():
     </div>""", unsafe_allow_html=True)
     st.markdown(f'<div class="logs-box">{logs}</div>', unsafe_allow_html=True)
 
-    # ── 5. IOC Section ────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
-
-    def ioc_card(label, value):
-        val_html = (
-            f'<div class="ioc-val">{value}</div>'
-            if value else
-            f'<div class="ioc-val ioc-na">{NA_TEXT[:30]}…</div>'
-        )
-        return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
-
-    st.markdown(f"""
-    <div class="ioc-grid">
-      {ioc_card("Source IP",      src_ip)}
-      {ioc_card("Destination IP", dst_ip)}
-      {ioc_card("Hostname",       host)}
-      {ioc_card("Username",       user)}
-      {ioc_card("Process",        proc)}
-      {ioc_card("Domain",         domain)}
-      {ioc_card("URL",            url)}
-      {ioc_card("File Hash",      fhash)}
-      {ioc_card("Filename",       fname)}
-    </div>""", unsafe_allow_html=True)
+    # ── 5. IOC Section (COMMENTED OUT FOR NOW) ────────────────────────────────
+    # st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
+    # def ioc_card(label, value):
+    #     val_html = (
+    #         f'<div class="ioc-val">{value}</div>'
+    #         if value else
+    #         f'<div class="ioc-val ioc-na">{NA_TEXT[:30]}…</div>'
+    #     )
+    #     return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
+    #
+    # st.markdown(f"""
+    # <div class="ioc-grid">
+    #   {ioc_card("Source IP",      src_ip)}
+    #   {ioc_card("Destination IP", dst_ip)}
+    #   {ioc_card("Hostname",       host)}
+    #   {ioc_card("Username",       user)}
+    #   {ioc_card("Process",        proc)}
+    #   {ioc_card("Domain",         domain)}
+    #   {ioc_card("URL",            url)}
+    #   {ioc_card("File Hash",      fhash)}
+    #   {ioc_card("Filename",       fname)}
+    # </div>""", unsafe_allow_html=True)
 
     # ── 6. Incident Timeline ──────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">⏱️ Incident Timeline</div>', unsafe_allow_html=True)
