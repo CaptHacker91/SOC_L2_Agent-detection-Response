@@ -4,7 +4,11 @@ from groq import Groq
 
 
 class ChatbotService:
-    """SOC Investigation Chatbot — Groq Llama 3.3 70B (14400 req/day FREE)"""
+    """
+    SOC L2 Investigation Chatbot — Groq Llama 3.3 70B
+    FIX: Alert injected fresh into system prompt every call → alert-specific answers.
+    FIX: Conversation history passed as messages → multi-turn context works.
+    """
 
     MODEL = "llama-3.3-70b-versatile"
 
@@ -13,25 +17,31 @@ class ChatbotService:
         self.last_request = 0
         self.min_interval = 2
 
-    def ask(self, question: str, alert: dict, logs: str) -> str:
+    def ask(self, question: str, alert: dict, logs: str, history: list = None) -> str:
         wait = self.min_interval - (time.time() - self.last_request)
         if wait > 0:
-            return f"⏳ Please wait {round(wait,1)}s before sending another request."
-
+            return f"⏳ Please wait {round(wait, 1)}s before sending another request."
         self.last_request = time.time()
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.MODEL,
-                messages=[
-                    {"role": "system", "content": self._system()},
-                    {"role": "user",   "content": self._prompt(question, alert, logs)},
-                ],
-                max_tokens=1024,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content
+        # System prompt built fresh with live alert data every single call
+        messages = [{"role": "system", "content": self._system(alert, logs)}]
 
+        # Include prior conversation (max 6 turns) for multi-turn context
+        if history:
+            for msg in history[-6:]:
+                if msg.get("role") in ("user", "assistant"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+
+        messages.append({"role": "user", "content": question})
+
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.MODEL,
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.4,
+            )
+            return resp.choices[0].message.content
         except Exception as e:
             msg = str(e)
             if "429" in msg or "rate_limit" in msg.lower():
@@ -40,44 +50,39 @@ class ChatbotService:
                 return "❌ Invalid Groq API key. Check GROQ_API_KEY in your .env file."
             return f"❌ Groq Error: {msg}"
 
-    def _system(self) -> str:
-        return (
-            "You are an expert SOC Level-2 Incident Response Analyst. "
-            "Analyze only the provided alert data. "
-            "Never invent IPs, usernames, or details not present in the alert. "
-            "Be concise, structured, and actionable."
-        )
+    def _system(self, alert: dict, logs: str) -> str:
+        """
+        System prompt is rebuilt fresh each call with actual alert fields.
+        This is THE fix for same-answer-every-time bug.
+        """
+        threat = alert.get("threat", "Unknown")
+        return f"""You are a SOC Level-2 Incident Response Analyst.
 
-    def _prompt(self, question: str, alert: dict, logs: str) -> str:
-        return f"""
-SECURITY ALERT
-══════════════
-Threat             : {alert.get("threat")}
-Severity           : {alert.get("severity")} | Risk Score: {alert.get("risk_score")}/10
-Detection          : {alert.get("final_detection")}
-MITRE Technique    : {alert.get("mapped_technique")}
-MITRE Tactic       : {alert.get("mitre_tactic")}
-Context            : {alert.get("context")}
-Business Impact    : {alert.get("business_impact")}
-Investigation Prio : {alert.get("investigation_priority")}
+You are investigating THIS specific security alert:
 
-ASSOCIATED LOGS
-═══════════════
+══════════════════════════════════════
+ACTIVE ALERT
+══════════════════════════════════════
+Threat         : {threat}
+Severity       : {alert.get("severity")} | Risk: {alert.get("risk_score")}/10
+Detection      : {alert.get("final_detection")}
+MITRE          : {alert.get("mapped_technique")} ({alert.get("mitre_tactic")}) — {alert.get("mitre_sub_name","?")}
+Context        : {alert.get("context")}
+Business Impact: {alert.get("business_impact")}
+Priority       : {alert.get("investigation_priority")}
+Tool           : {alert.get("tool")} | Rule: {alert.get("rule_type")}
+Signature      : {alert.get("signature","Not available")}
+
+LOGS
+════
 {logs}
+══════════════════════════════════════
 
-ANALYST QUESTION
-════════════════
-{question}
-
-Respond with these sections (2-4 lines each):
-
-**1. Executive Summary**
-**2. Threat Explanation**
-**3. Root Cause Analysis**
-**4. MITRE ATT&CK Explanation**
-**5. Business Impact**
-**6. Investigation Steps**
-**7. Containment Recommendations**
-**8. Remediation Steps**
-**9. Confidence Level** (High / Medium / Low + reason)
+Rules:
+- ALWAYS reference the specific threat: "{threat}"
+- NEVER give generic advice — tailor to this exact alert
+- NEVER invent IPs, usernames, or timestamps not present above
+- If data is missing, say "Not available in supplied telemetry"
+- Be concise, structured, and directly actionable
+- Recommendations must be specific to {alert.get("mitre_tactic")} / {alert.get("mapped_technique")}
 """

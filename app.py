@@ -9,9 +9,9 @@ from engine.severity_engine import SeverityEngine
 from engine.alert_triangle import AlertTriangle
 
 load_dotenv()
-st.set_page_config(page_title="SOAK Agent | Blue Team Defence", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="SOC L2 Agent | Blue Team Defence", page_icon="🛡️", layout="wide")
 
-# ── Dashboard CSS — SOAK Agent olive/brown/rose theme ─────────────────────────
+# ── Dashboard CSS — SOC L2 Agent olive/brown/rose theme ─────────────────────────
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -34,14 +34,14 @@ html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{
 .block-container{padding:0!important;max-width:100%!important}
 
 /* ── Header ── */
-.soak-header{
+.soc-header{
   background:linear-gradient(135deg,#4f6428 0%,#6b8e23 48%,saddlebrown 100%);
   color:white;padding:28px 25px 22px;text-align:center;
   box-shadow:0 6px 18px rgba(60,40,20,0.25);position:relative;overflow:hidden;
   margin-bottom:24px;
 }
-.soak-header h1{margin:0;font-size:34px;font-weight:800;letter-spacing:.5px}
-.soak-header p{margin-top:8px;font-size:15px;opacity:.92}
+.soc-header h1{margin:0;font-size:34px;font-weight:800;letter-spacing:.5px}
+.soc-header p{margin-top:8px;font-size:15px;opacity:.92}
 .header-deco{font-size:20px;letter-spacing:12px;margin-bottom:8px;opacity:.8}
 
 /* ── KPI cards ── */
@@ -99,9 +99,9 @@ input[type=text],.stTextInput input{
 ::-webkit-scrollbar-thumb{background:#b5a898;border-radius:4px}
 
 /* ── Footer ── */
-.soak-footer{text-align:center;padding:28px;color:var(--brown);font-weight:700;
+.soc-footer{text-align:center;padding:28px;color:var(--brown);font-weight:700;
   border-top:2px solid #ddd5c8;margin-top:24px}
-.soak-footer small{color:var(--gray);font-size:12px}
+.soc-footer small{color:var(--gray);font-size:12px}
 </style>
 """
 
@@ -125,9 +125,9 @@ def load_pipeline():
 # ── Header ─────────────────────────────────────────────────────────────────────
 def render_header():
     st.markdown(f"""{CSS}
-    <div class="soak-header">
+    <div class="soc-header">
       <div class="header-deco">✦ ✧ ✦ ✧ ✦</div>
-      <h1>🛡️ SOAK Agent</h1>
+      <h1>🛡️ SOC L2 Agent</h1>
       <p>Blue Team Defence Intelligence Dashboard · SOC L2 AI Investigation Platform</p>
     </div>""", unsafe_allow_html=True)
 
@@ -225,8 +225,8 @@ def main():
         render_alert_card(a, i)
 
     st.markdown("""
-    <div class="soak-footer">
-      🛡️ SOAK Agent · Blue Team Defence Intelligence Dashboard
+    <div class="soc-footer">
+      🛡️ SOC L2 Agent · Blue Team Defence Intelligence Dashboard
       <br><small>Developed by Drashya Desai · Helee Mistry · Tanmay Pramar</small>
     </div>""", unsafe_allow_html=True)
 
