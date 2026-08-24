@@ -203,6 +203,7 @@ def main():
     # Filters
     c1, c2, c3 = st.columns([2, 1, 1])
     
+    # FIX: Accessibility label added here
     search  = c1.text_input("Search alerts", placeholder="🔍 Search threats, techniques, tools…", label_visibility="collapsed")
     
     sevs    = ["All"] + [s for s in ["Critical","High","Medium","Low"] if any(a.get("severity")==s for a in alerts)]

@@ -6,4 +6,6 @@ groq
 requests
 plotly
 streamlit
+fpdf2
+
 

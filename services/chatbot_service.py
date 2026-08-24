@@ -10,7 +10,7 @@ class ChatbotService:
     FIX: Conversation history passed as messages → multi-turn context works.
     """
 
-    MODEL = "llama-3.3-70b-versatile"
+    MODEL = "llama3-8b-8192"
 
     def __init__(self, api_key: str):
         self.client       = Groq(api_key=api_key)

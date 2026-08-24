@@ -232,14 +232,14 @@ def main():
       <span class="badge {cls}" style="font-size:13px;padding:6px 14px">{dot} {sev}</span>
     </div>""", unsafe_allow_html=True)
 
-    # ── FIX: PDF Download Section ─────────────────────────────────────────────
+    # ── FIX: PDF Download Section (Direct Download Button) ────────────────────
     col_back, col_pdf, _ = st.columns([1, 1.5, 7])
     with col_back:
         if st.button("← Dashboard"):
             st.switch_page("app.py")
     
     with col_pdf:
-        # Pura data aur bytes pehle prepare kar lo
+        # Pre-generate AI summary
         ai_summary = ""
         if st.session_state.get("chat_history"):
             ai_summary = "\n\n".join(
@@ -249,12 +249,14 @@ def main():
             )
         
         try:
+            # Generate bytes before creating the button to avoid state-loss
             pdf_bytes = generate_pdf(a, ai_summary)
-            # Seedha download button use karo, without nesting inside st.button!
+            
+            # This is the proper Streamlit way. It won't redirect or print raw text.
             st.download_button(
                 label="📄 Download PDF Report",
                 data=pdf_bytes,
-                file_name=f"SOC_Report_{inc_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                file_name=f"SOC_Report_{inc_id}.pdf",
                 mime="application/pdf",
             )
         except Exception as e:
@@ -310,7 +312,7 @@ def main():
     </div>""", unsafe_allow_html=True)
     st.markdown(f'<div class="logs-box">{logs}</div>', unsafe_allow_html=True)
 
-    # ── 5. IOC Section (COMMENTED OUT FOR NOW) ────────────────────────────────
+    # ── 5. IOC Section (COMMENTED OUT AS REQUESTED) ───────────────────────────
     # st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
     # def ioc_card(label, value):
     #     val_html = (
@@ -439,8 +441,10 @@ def main():
 
     ci, cs, cc = st.columns([6, 1, 1])
     with ci:
+        # FIX: Added "Ask SOC AI" label to resolve the Empty Label warning
         q = st.text_input(
-            "", placeholder="e.g. What should the SOC analyst do next?",
+            "Ask SOC AI", 
+            placeholder="e.g. What should the SOC analyst do next?",
             label_visibility="collapsed", key="chat_input"
         )
     with cs:
@@ -454,10 +458,9 @@ def main():
         st.session_state.chat_history.append({"role": "user", "content": q.strip()})
         with st.spinner("🛡 SOC AI analysing…"):
             try:
-                # FIX: pass history so multi-turn works + alert injected fresh
                 reply = _get_chatbot().ask(
                     q.strip(), a, logs,
-                    history=st.session_state.chat_history[:-1]  # exclude current q
+                    history=st.session_state.chat_history[:-1]  
                 )
             except Exception as e:
                 reply = f"Error: {e}"
@@ -473,7 +476,6 @@ def main():
         Developed by Drashya Desai · Helee Mistry · Tanmay Pramar
       </small>
     </div>""", unsafe_allow_html=True)
-
 
 if __name__ == "__main__":
     main()

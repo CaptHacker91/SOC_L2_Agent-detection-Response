@@ -5,7 +5,7 @@ from groq import Groq
 class LLMService:
     """One-shot investigation report — Groq Llama 3.3 70B"""
 
-    MODEL = "llama-3.3-70b-versatile"
+    MODEL = "llama3-8b-8192"
 
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)

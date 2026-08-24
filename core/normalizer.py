@@ -3,7 +3,7 @@ import pandas as pd
 
 class DataNormalizer:
     """
-    Normalize Detection Dataset
+    Normalize Detection Dataset 
     """
 
     def normalize(self, parsed_data):
