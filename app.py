@@ -227,11 +227,11 @@ def main():
     for i, a in enumerate(filtered):
         render_alert_card(a, i)
 
-    st.markdown("""
-    <div class="soc-footer">
-      🛡️ SOC L2 Agent · Blue Team Defence Intelligence Dashboard
-      <br><small>Developed by Drashya Desai · Helee Mistry · Tanmay Pramar</small>
-    </div>""", unsafe_allow_html=True)
+  #  st.markdown("""
+    #<div class="soc-footer">
+     # 🛡️ SOC L2 Agent · Blue Team Defence Intelligence Dashboard
+    #  <br><small>Developed by Drashya Desai · Helee Mistry · Tanmay Pramar</small>
+   # </div>""", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
