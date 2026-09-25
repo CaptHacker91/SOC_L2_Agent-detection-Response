@@ -19,7 +19,7 @@ def get_data_source():
         SPLUNK_HOST=your-splunk-host
         SPLUNK_PORT=8089
         SPLUNK_TOKEN=your-splunk-auth-token
-        SPLUNK_SEARCH_QUERY=index=alerts sourcetype=soc_detections | table id threat rule_type signature tool mapped_technique
+        SPLUNK_SEARCH_QUERY=index=main earliest=-24h
         SPLUNK_VERIFY_SSL=true
 
     NOTE: this factory does NOT fall back to mock on Splunk failure —

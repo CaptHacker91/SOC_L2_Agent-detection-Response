@@ -1,50 +1,21 @@
 class DetectionParser:
     """
-    Parse Blue Team Defense Dataset
+    Parse Splunk export records.
+    Preserves every original Splunk field.
     """
 
     def parse(self, records):
-        """
-        Parse raw records into
-        a standardized format.
-        """
-
         parsed_records = []
 
         for record in records:
+            # Splunk export may be:
+            # {"preview": false, "result": {...}}
+            if isinstance(record, dict) and "result" in record:
+                event = record["result"]
+            else:
+                event = record
 
-            parsed_records.append(
-                {
-                    "id": record.get(
-                        "id",
-                        0,
-                    ),
-
-                    "threat": record.get(
-                        "threat",
-                        "Unknown Threat",
-                    ),
-
-                    "rule_type": record.get(
-                        "rule_type",
-                        "Unknown",
-                    ),
-
-                    "signature": record.get(
-                        "signature",
-                        "Unknown",
-                    ),
-
-                    "tool": record.get(
-                        "tool",
-                        "Unknown",
-                    ),
-
-                    "mapped_technique": record.get(
-                        "mapped_technique",
-                        "Unknown",
-                    ),
-                }
-            )
+            if isinstance(event, dict):
+                parsed_records.append(dict(event))
 
         return parsed_records
