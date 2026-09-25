@@ -97,12 +97,15 @@ def load_pipeline():
     # never silently label mock data as live Splunk data.
     try:
         raw = get_data_source().load()
-        if os.getenv("DATA_SOURCE", "mock").lower() == "splunk":
+        if os.getenv("DATA_SOURCE", "splunk").lower() == "splunk":
             st.success("Loaded live alerts from Splunk.")
     except Exception as e:
-        if os.getenv("DATA_SOURCE", "mock").lower() == "splunk":
-            st.warning(f"Splunk unavailable ({e}) — showing local demo dataset instead.")
-        raw = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl").load()
+        if os.getenv("DATA_SOURCE", "splunk").lower() == "splunk":
+            st.error(f"Splunk connection failed: {e}")
+            st.stop()
+        raw = FileLoader(
+            os.getenv("MOCK_DATA_PATH", "data/BLUE_TEAM_DEFENSE_DATASET.jsonl")
+        ).load()
 
     parsed = DetectionParser().parse(raw)
     df     = DataNormalizer().normalize(parsed)

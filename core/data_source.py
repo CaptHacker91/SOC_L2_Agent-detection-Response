@@ -26,7 +26,7 @@ def get_data_source():
     that fallback (and the analyst-facing warning) lives in app.py's
     load_pipeline(), which is the right layer to surface it in the UI.
     """
-    source = os.getenv("DATA_SOURCE", "mock").lower()
+    source = os.getenv("DATA_SOURCE", "splunk").lower()
 
     if source == "splunk":
         from core.splunk_loader import SplunkLoader
