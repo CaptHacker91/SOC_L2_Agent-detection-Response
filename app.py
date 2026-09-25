@@ -1,6 +1,8 @@
+import os
 import streamlit as st
 from dotenv import load_dotenv
 from core.file_loader import FileLoader
+from core.data_source import get_data_source
 from core.parser import DetectionParser
 from core.normalizer import DataNormalizer
 from engine.detection_engine import DetectionEngine
@@ -89,7 +91,19 @@ SEV_DOT   = {"Critical": "🔴",      "High": "🟠",       "Medium": "🟡",   
 # ── Pipeline ───────────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Running detection pipeline...")
 def load_pipeline():
-    raw    = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl").load()
+    # DATA_SOURCE env var picks mock vs Splunk (core/data_source.py).
+    # If Splunk is configured but unreachable, fall back to the mock
+    # dataset rather than crashing — and tell the analyst honestly,
+    # never silently label mock data as live Splunk data.
+    try:
+        raw = get_data_source().load()
+        if os.getenv("DATA_SOURCE", "mock").lower() == "splunk":
+            st.success("Loaded live alerts from Splunk.")
+    except Exception as e:
+        if os.getenv("DATA_SOURCE", "mock").lower() == "splunk":
+            st.warning(f"Splunk unavailable ({e}) — showing local demo dataset instead.")
+        raw = FileLoader("data/BLUE_TEAM_DEFENSE_DATASET.jsonl").load()
+
     parsed = DetectionParser().parse(raw)
     df     = DataNormalizer().normalize(parsed)
     df     = DetectionEngine("rules/detection_rules.json").analyze(df)

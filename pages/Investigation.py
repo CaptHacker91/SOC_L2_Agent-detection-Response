@@ -3,6 +3,7 @@ import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
 from services.chatbot_service import ChatbotService
+from services.llm_service import LLMService
 from services.report_service import generate_pdf, get_recommendations, build_report_data
 
 load_dotenv()
@@ -147,6 +148,11 @@ def _get_chatbot():
     return ChatbotService(os.getenv("GROQ_API_KEY", ""))
 
 
+@st.cache_resource
+def _get_investigator():
+    return LLMService(os.getenv("GROQ_API_KEY", ""))
+
+
 def _na(v):
     return v if v and v not in ("—", "", "N/A", None) else NA_TEXT
 
@@ -239,14 +245,19 @@ def main():
             st.switch_page("app.py")
     
     with col_pdf:
-        # Pre-generate AI summary
-        ai_summary = ""
+        # Pre-generate AI summary — investigation report takes priority over raw chat log
+        ai_summary_parts = []
+        report_text = st.session_state.get(f"ai_report_{inc_id}")
+        if report_text:
+            ai_summary_parts.append(report_text)
         if st.session_state.get("chat_history"):
-            ai_summary = "\n\n".join(
+            chat_text = "\n\n".join(
                 f"Q: {m['content']}" if m["role"] == "user"
                 else f"A: {m['content']}"
                 for m in st.session_state.chat_history
             )
+            ai_summary_parts.append("--- Analyst Chat Log ---\n" + chat_text)
+        ai_summary = "\n\n".join(ai_summary_parts)
         
         try:
             # Generate bytes before creating the button to avoid state-loss
@@ -312,28 +323,31 @@ def main():
     </div>""", unsafe_allow_html=True)
     st.markdown(f'<div class="logs-box">{logs}</div>', unsafe_allow_html=True)
 
-    # ── 5. IOC Section (COMMENTED OUT AS REQUESTED) ───────────────────────────
-    # st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
-    # def ioc_card(label, value):
-    #     val_html = (
-    #         f'<div class="ioc-val">{value}</div>'
-    #         if value else
-    #         f'<div class="ioc-val ioc-na">{NA_TEXT[:30]}…</div>'
-    #     )
-    #     return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
-    #
-    # st.markdown(f"""
-    # <div class="ioc-grid">
-    #   {ioc_card("Source IP",      src_ip)}
-    #   {ioc_card("Destination IP", dst_ip)}
-    #   {ioc_card("Hostname",       host)}
-    #   {ioc_card("Username",       user)}
-    #   {ioc_card("Process",        proc)}
-    #   {ioc_card("Domain",         domain)}
-    #   {ioc_card("URL",            url)}
-    #   {ioc_card("File Hash",      fhash)}
-    #   {ioc_card("Filename",       fname)}
-    # </div>""", unsafe_allow_html=True)
+    # ── 5. IOC Section ─────────────────────────────────────────────────────────
+    st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
+
+    def ioc_card(label, value):
+        val_html = (
+            f'<div class="ioc-val">{value}</div>'
+            if value else
+            f'<div class="ioc-val ioc-na">{NA_TEXT[:30]}…</div>'
+        )
+        return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
+
+    st.markdown(f"""
+    <div class="ioc-grid">
+      {ioc_card("Source IP",      src_ip)}
+      {ioc_card("Destination IP", dst_ip)}
+      {ioc_card("Hostname",       host)}
+      {ioc_card("Username",       user)}
+      {ioc_card("Process",        proc)}
+      {ioc_card("Domain",         domain)}
+      {ioc_card("URL",            url)}
+      {ioc_card("File Hash",      fhash)}
+      {ioc_card("Filename",       fname)}
+    </div>""", unsafe_allow_html=True)
+    st.caption("⚠️ Current dataset does not include forensic IOC fields (IP/host/user). "
+               "Populated automatically once the Splunk/log source provides them.")
 
     # ── 6. Incident Timeline ──────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">⏱️ Incident Timeline</div>', unsafe_allow_html=True)
@@ -411,6 +425,35 @@ def main():
             for i, step in enumerate(steps)
         )
         st.markdown(f'<div class="rec-section">{items}</div>', unsafe_allow_html=True)
+
+    # ── 8b. AI Investigation Report (one-shot, distinct from chat) ────────────
+    st.markdown('<div class="sec-heading">🧠 AI Investigation Report</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="ai-label">⚠️ AI-generated report. Verify against telemetry before acting.</div>',
+        unsafe_allow_html=True
+    )
+
+    report_key = f"ai_report_{inc_id}"
+    if report_key not in st.session_state:
+        st.session_state[report_key] = None
+
+    if st.session_state[report_key] is None:
+        if st.button("🧠 Generate AI Investigation Report"):
+            with st.spinner("🛡 Generating executive summary, root cause & recommendations…"):
+                try:
+                    st.session_state[report_key] = _get_investigator().investigate(a)
+                except Exception as e:
+                    st.session_state[report_key] = f"Error generating report: {e}"
+            st.rerun()
+    else:
+        st.markdown(
+            f'<div class="findings-box" style="white-space:pre-wrap;line-height:1.7;'
+            f'font-size:13px">{st.session_state[report_key]}</div>',
+            unsafe_allow_html=True
+        )
+        if st.button("🔄 Regenerate Report"):
+            st.session_state[report_key] = None
+            st.rerun()
 
     # ── 9. SOC AI Chatbot ─────────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">🤖 SOC AI Analyst Assistant</div>', unsafe_allow_html=True)
