@@ -1,54 +1,28 @@
 import json
-
 import pandas as pd
-
-from sklearn.ensemble import IsolationForest
-from sklearn.neighbors import LocalOutlierFactor
 
 
 class DetectionEngine:
-    """
-    Hybrid Detection Engine
-
-    Features:
-    - Rule-Based Detection
-    - Isolation Forest
-    - Local Outlier Factor
-    - Detection Correlation
-    """
-
     def __init__(self, rule_file):
         self.rule_file = rule_file
         self.rules = self._load_rules()
 
     def _load_rules(self):
-        """
-        Load Detection Rules
-        """
-
-        with open(self.rule_file, "r", encoding="utf-8") as file:
-            return json.load(file)
+        try:
+            with open(self.rule_file, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except Exception:
+            return []
 
     def analyze(self, dataframe):
-        """
-        Main Detection Pipeline
-        """
-
         df = dataframe.copy()
 
-        df["rule_match"] = df["threat"].apply(
-            self._rule_based_detection
-        )
+        if df.empty:
+            return df
 
-        features = self._prepare_features(df)
-
-        df["isolation_prediction"] = (
-            self._isolation_forest_detection(features)
-        )
-
-        df["lof_prediction"] = (
-            self._lof_detection(features)
-        )
+        # Rule matching is based on the derived SOC threat,
+        # while all original Splunk fields remain untouched.
+        df["rule_match"] = df.apply(self._rule_based_detection, axis=1)
 
         df["final_detection"] = df.apply(
             self._correlate_results,
@@ -57,102 +31,31 @@ class DetectionEngine:
 
         return df
 
-    def _rule_based_detection(self, threat):
-        """
-        Rule-Based Detection
-        """
+    def _rule_based_detection(self, row):
+        threat = str(row.get("threat", ""))
 
         for rule in self.rules:
-
-            if threat == rule["threat"]:
+            if threat == str(rule.get("threat", "")):
                 return True
 
-        return False
-
-    def _prepare_features(self, dataframe):
-        """
-        Prepare Features
-        """
-
-        return pd.DataFrame(
-            {
-                "id": dataframe["id"].astype(int),
-                "tool": dataframe["tool"]
-                .astype("category")
-                .cat.codes,
-                "rule_type": dataframe["rule_type"]
-                .astype("category")
-                .cat.codes,
-            }
-        )
-
-    def _isolation_forest_detection(self, features):
-        """
-        Isolation Forest
-        """
-
-        model = IsolationForest(
-            contamination=0.10,
-            random_state=42,
-        )
-
-        return model.fit_predict(features)
-
-    def _lof_detection(self, features):
-        """
-        Local Outlier Factor
-        """
-
-        model = LocalOutlierFactor(
-            contamination=0.10
-        )
-
-        return model.fit_predict(features)
+        # Derived detections from actual Splunk telemetry.
+        return threat not in {
+            "",
+            "Normal Event",
+            "Normal Business Event",
+        }
 
     def _correlate_results(self, row):
-        """
-        Hybrid Correlation
-        """
+        threat = str(row.get("threat", ""))
+        risk = float(row.get("derived_risk_score", 0) or 0)
 
-        anomaly = (
-            row["isolation_prediction"] == -1
-            or row["lof_prediction"] == -1
-        )
+        if threat in {"", "Normal Event", "Normal Business Event"}:
+            return "Normal"
 
-        if row["rule_match"] and anomaly:
+        if risk >= 9.0:
             return "Confirmed Threat"
 
-        if row["rule_match"]:
+        if risk >= 7.0:
             return "Rule Match"
 
-        if anomaly:
-            return "Anomaly"
-
-        return "Normal"
-
-    def summary(self, dataframe):
-        """
-        Detection Summary
-        """
-
-        return {
-            "Confirmed Threat": (
-                dataframe["final_detection"]
-                == "Confirmed Threat"
-            ).sum(),
-
-            "Rule Match": (
-                dataframe["final_detection"]
-                == "Rule Match"
-            ).sum(),
-
-            "Anomaly": (
-                dataframe["final_detection"]
-                == "Anomaly"
-            ).sum(),
-
-            "Normal": (
-                dataframe["final_detection"]
-                == "Normal"
-            ).sum(),
-        }
+        return "Anomaly"
