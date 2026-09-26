@@ -1,146 +1,36 @@
 import os
 import streamlit as st
-from datetime import datetime
 from dotenv import load_dotenv
+
+from core.pipeline import load_pipeline
 from services.chatbot_service import ChatbotService
 from services.llm_service import LLMService
 from services.report_service import generate_pdf, get_recommendations, build_report_data
 
-load_dotenv()
-st.set_page_config(
-    page_title="Investigation | SOC L2 Agent",
-    page_icon="🔍",
-    layout="wide",
-)
+load_dotenv(override=True)
+st.set_page_config(page_title="Investigation | SOC L2 Agent", page_icon="🔎", layout="wide")
 
-# ── CSS — Same olive/brown/rose theme, SOC name ───────────────────────────────
+NA_TEXT = "Not available in supplied telemetry"
+
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --olive:#6b8e23;--olive-dark:#4f6428;
-  --brown:saddlebrown;--bg:#eee8dc;--paper:#fffdf8;--dark:#2f3e2f;
-}
-html,body,[data-testid="stApp"],[data-testid="stAppViewContainer"]{
-  background:var(--bg)!important;color:var(--dark)!important;
-  font-family:'Segoe UI',Arial,sans-serif!important;
-}
-[data-testid="stHeader"],[data-testid="stToolbar"],footer,#MainMenu{display:none!important}
-.block-container{padding:0!important;max-width:100%!important}
-
-.soc-header{
-  background:linear-gradient(135deg,#4f6428 0%,#6b8e23 48%,saddlebrown 100%);
-  color:white;padding:16px 24px;
-  box-shadow:0 6px 18px rgba(60,40,20,.25);margin-bottom:16px;
-  display:flex;justify-content:space-between;align-items:center;
-}
-.soc-header h1{margin:0;font-size:19px;font-weight:800}
-.soc-header p{margin:3px 0 0;font-size:11px;opacity:.85}
-
-.sec-heading{color:var(--olive-dark);font-size:17px;font-weight:800;
-  border-bottom:3px solid rosybrown;padding-bottom:7px;margin:14px 22px 10px}
-
-/* Detail grid */
-.dg{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:0 22px;margin-bottom:12px}
-.dg.cols2{grid-template-columns:repeat(2,1fr)}
-.dg.cols3{grid-template-columns:repeat(3,1fr)}
-.dc{background:var(--paper);border:1px solid #ddd5c8;border-radius:12px;
-  padding:12px 14px;box-shadow:0 3px 10px rgba(65,50,35,.08)}
-.dc.span2{grid-column:span 2}
-.dc.full{grid-column:1/-1}
-.dl{font-size:10px;font-weight:700;color:#7a5a3a;text-transform:uppercase;
-  letter-spacing:.1em;margin-bottom:4px}
-.dv{font-size:13px;font-weight:600;color:var(--dark);line-height:1.4}
-
-/* Severity badges */
-.badge{display:inline-flex;padding:3px 10px;border-radius:20px;
-  font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:1px solid}
-.sev-C{color:#8b0000;background:#ffe0e0;border-color:#ffaaaa}
-.sev-H{color:#7a3b00;background:#fff0d8;border-color:#ffcc88}
-.sev-M{color:#5a4a00;background:#fff8d8;border-color:#ffe066}
-.sev-L{color:#2a5a2a;background:#e0f5e0;border-color:#88cc88}
-.chip{font-size:11px;color:#7a5a3a;font-family:'JetBrains Mono',monospace;
-  background:#f0ebe3;padding:3px 8px;border-radius:6px;border:1px solid #ddd5c8}
-
-/* Findings box */
-.findings-box{background:var(--paper);border:2px solid #4f6428;border-radius:14px;
-  padding:16px 18px;margin:0 22px 12px}
-.finding-row{display:flex;justify-content:space-between;align-items:center;
-  padding:6px 0;border-bottom:1px solid #e8e0d0}
-.finding-row:last-child{border-bottom:none}
-.fk{font-size:12px;font-weight:700;color:#7a5a3a}
-.fv{font-size:12px;font-weight:600;color:var(--dark);text-align:right}
-
-/* Logs */
-.logs-box{background:#2f3e2f;border-radius:12px;padding:14px 16px;margin:0 22px 12px;
-  font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#c8d8b8;
-  border:1px solid #4f6428;white-space:pre-wrap;line-height:1.6;
-  max-height:200px;overflow-y:auto}
-
-/* Timeline */
-.timeline{padding:0 22px;margin-bottom:12px}
-.tl-row{display:flex;gap:14px;padding:8px 0;border-bottom:1px solid #e8e0d0;align-items:flex-start}
-.tl-dot{width:10px;height:10px;border-radius:50%;background:#6b8e23;margin-top:4px;flex-shrink:0}
-.tl-dot.C{background:#cc2222}.tl-dot.H{background:#b86000}
-.tl-dot.M{background:#a08000}.tl-dot.L{background:#2a7a2a}
-.tl-time{font-size:11px;font-family:'JetBrains Mono',monospace;color:#7a5a3a;width:160px;flex-shrink:0}
-.tl-event{font-size:12px;font-weight:600;color:var(--dark)}
-.tl-src{font-size:10px;color:#7a5a3a}
-
-/* IOC */
-.ioc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:0 22px;margin-bottom:12px}
-.ioc-item{background:var(--paper);border:1px solid #ddd5c8;border-radius:10px;padding:10px 12px}
-.ioc-type{font-size:10px;font-weight:700;color:#4f6428;text-transform:uppercase;margin-bottom:3px}
-.ioc-val{font-size:11.5px;font-family:'JetBrains Mono',monospace;color:var(--dark);word-break:break-all}
-.ioc-na{color:#bbb;font-style:italic}
-
-/* Recs */
-.rec-section{padding:0 22px;margin-bottom:6px}
-.rec-item{display:flex;gap:8px;padding:5px 0;align-items:flex-start}
-.rec-num{font-size:11px;font-weight:800;color:var(--olive-dark);min-width:20px}
-.rec-text{font-size:12px;color:var(--dark);line-height:1.5}
-
-/* Chat */
-.chat-wrap{background:var(--paper);border:2px solid #ddd5c8;border-radius:14px;
-  overflow:hidden;margin:0 22px 12px}
-.chat-body{padding:12px;min-height:180px;max-height:320px;overflow-y:auto;
-  display:flex;flex-direction:column;gap:9px}
-.msg{display:flex;flex-direction:column;max-width:85%}
-.msg.user{align-self:flex-end;align-items:flex-end}
-.msg.assistant{align-self:flex-start;align-items:flex-start}
-.bubble{padding:9px 13px;border-radius:13px;font-size:12.5px;line-height:1.6;white-space:pre-wrap}
-.msg.user .bubble{background:linear-gradient(135deg,#4f6428,#6b8e23);color:#fff;
-  border-radius:13px 13px 3px 13px}
-.msg.assistant .bubble{background:#f5eee3;color:var(--dark);
-  border:1px solid #ddd5c8;border-radius:3px 13px 13px 13px}
-.role-lbl{font-size:9px;color:#7a5a3a;margin-bottom:2px;
-  font-family:'JetBrains Mono',monospace;letter-spacing:.08em;text-transform:uppercase}
-.ai-label{font-size:10px;color:#7a5a3a;font-style:italic;
-  margin:0 22px 6px;padding:4px 8px;background:#f0ebe3;
-  border-radius:6px;display:inline-block}
-
-/* Buttons */
-div[data-testid="stButton"]>button, div[data-testid="stDownloadButton"]>button{
-  background:linear-gradient(135deg,#4f6428,#6b8e23)!important;color:#fff!important;
-  border:none!important;border-radius:8px!important;padding:.3rem .9rem!important;
-  font-size:.72rem!important;font-weight:700!important;
-  box-shadow:0 2px 8px rgba(79,100,40,.4)!important;
-}
-div[data-testid="stButton"]>button:hover, div[data-testid="stDownloadButton"]>button:hover{
-  opacity:.88!important;transform:translateY(-1px)!important
-}
-input[type=text],.stTextInput input{
-  background:#fffdf8!important;border:2px solid #d5cec2!important;
-  color:var(--dark)!important;border-radius:10px!important;font-size:.82rem!important}
-::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#b5a898;border-radius:4px}
+.stApp{ background:#eee8dc; }
+.sec-heading{ color:#4f6428; font-size:19px; font-weight:800; margin:22px 0 10px;
+       border-bottom:3px solid rosybrown; padding-bottom:8px; }
+.field-box{ background:#fffdf8; padding:14px; border-radius:10px; box-shadow:0 2px 8px rgba(65,50,35,.08); }
+.field-label{ font-size:11px; font-weight:800; color:saddlebrown; letter-spacing:.04em; }
+.field-val{ font-size:14px; color:#2f3e2f; margin-top:2px; }
+.field-na{ color:#aaa; font-style:italic; }
+.ioc-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.ioc-item{ background:#fffdf8; padding:14px; border-radius:10px; box-shadow:0 2px 8px rgba(65,50,35,.08); }
+.ioc-type{ font-size:11px; font-weight:800; color:saddlebrown; }
+.ioc-val{ font-size:14px; margin-top:2px; word-break:break-all; }
+.ioc-na{ color:#aaa; font-style:italic; }
+.findings-box{ background:#2f3e2f; color:#dce8c4; padding:16px; border-radius:10px; font-family:monospace; font-size:13px; }
+.ai-label{ font-size:12px; color:#a15c1c; font-weight:700; margin-bottom:8px; }
 </style>
 """
-
-SEV_CLS = {"Critical":"sev-C","High":"sev-H","Medium":"sev-M","Low":"sev-L"}
-SEV_DOT = {"Critical":"🔴","High":"🟠","Medium":"🟡","Low":"🟢"}
-SEV_COL = {"Critical":"#cc2222","High":"#b86000","Medium":"#a08000","Low":"#2a7a2a"}
-NA_TEXT = "Not available in supplied telemetry"
+st.markdown(CSS, unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -153,285 +43,112 @@ def _get_investigator():
     return LLMService(os.getenv("GROQ_API_KEY", ""))
 
 
-def _na(v):
-    return v if v and v not in ("—", "", "N/A", None) else NA_TEXT
+def field(label, value):
+    val_html = f'<div class="field-val">{value}</div>' if value else f'<div class="field-val field-na">{NA_TEXT}</div>'
+    return f'<div class="field-box"><div class="field-label">{label}</div>{val_html}</div>'
 
 
-def dc(lbl, val, span2=False, full=False):
-    cls = " span2" if span2 else (" full" if full else "")
-    return (
-        f'<div class="dc{cls}">'
-        f'<div class="dl">{lbl}</div>'
-        f'<div class="dv">{val}</div>'
-        f'</div>'
-    )
-
-
-def chat_bubble(role, text):
-    lbl = "You" if role == "user" else "🛡 SOC AI"
-    return (
-        f'<div class="msg {role}">'
-        f'<div class="role-lbl">{lbl}</div>'
-        f'<div class="bubble">{text}</div>'
-        f'</div>'
-    )
+def ioc_card(label, value):
+    val_html = f'<div class="ioc-val">{value}</div>' if value else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
+    return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
 
 
 def main():
-    st.markdown(CSS, unsafe_allow_html=True)
-
-    a = st.session_state.get("selected_alert")
-    if not a:
-        st.warning("No alert selected. Go back to Dashboard and click Investigate.")
-        if st.button("← Back to Dashboard"):
-            st.switch_page("app.py")
+    df = load_pipeline()
+    if df.empty:
+        st.error("No data loaded. Go back to the dashboard.")
         return
 
-    # Extract all fields
-    sev    = a.get("severity", "Low")
-    cls    = SEV_CLS.get(sev, "sev-L")
-    dot    = SEV_DOT.get(sev, "⚪")
-    col    = SEV_COL.get(sev, "#6b8e23")
-    threat = a.get("threat", "Unknown Threat")
-    tech   = a.get("mapped_technique", "—")
-    tactic = a.get("mitre_tactic", "—")
-    sub    = a.get("mitre_sub_name", "—")
-    risk   = a.get("risk_score", "—")
-    det    = a.get("final_detection", "—")
-    impact = a.get("business_impact", "—")
-    prio   = a.get("investigation_priority", "—")
-    ctx    = a.get("context", "—")
-    sig    = a.get("signature", "—")
-    tool   = a.get("tool", "—")
-    rule_t = a.get("rule_type", "—")
-    inc_id = f"INC-{str(a.get('id','000')).zfill(4)}"
-    ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    inc_id = st.session_state.get("selected_alert_id")
+    if inc_id is None:
+        st.warning("No alert selected. Go back to the dashboard and click 'Investigate' on an alert.")
+        return
 
-    # Forensic fields (optional)
-    src_ip  = a.get("source_ip")
-    dst_ip  = a.get("destination_ip")
-    host    = a.get("hostname")
-    user    = a.get("username")
-    proc    = a.get("process_name")
-    domain  = a.get("domain")
-    url     = a.get("url")
-    fhash   = a.get("file_hash")
-    fname   = a.get("filename")
+    match = df[df["id"] == str(inc_id)]
+    if match.empty:
+        st.error(f"Alert {inc_id} not found in the current dataset.")
+        return
+    a = match.iloc[0].to_dict()
 
-    logs = (
-        f"Threat     : {threat}\n"
-        f"Technique  : {tech} ({tactic})\n"
-        f"Sub-Tech   : {sub}\n"
-        f"Tool       : {tool}  |  Rule Type: {rule_t}\n"
-        f"Detection  : {det}\n"
-        f"Context    : {ctx}\n"
-        f"Signature  : {sig}"
-    )
+    # ── 1. Incident Header ───────────────────────────────────────────────────
+    st.markdown(f"## 🔎 Incident {inc_id}")
+    c = st.columns(4)
+    c[0].markdown(field("ALERT NAME", a.get("threat")), unsafe_allow_html=True)
+    c[1].markdown(field("TIMESTAMP", a.get("event_time")), unsafe_allow_html=True)
+    c[2].markdown(field("SEVERITY", a.get("severity")), unsafe_allow_html=True)
+    c[3].markdown(field("RISK SCORE", f"{a.get('risk_score')}/10" if a.get("risk_score") is not None else None), unsafe_allow_html=True)
+    c2 = st.columns(4)
+    c2[0].markdown(field("HOST", a.get("hostname")), unsafe_allow_html=True)
+    c2[1].markdown(field("SOURCE IP", a.get("source_ip")), unsafe_allow_html=True)
+    c2[2].markdown(field("USERNAME", a.get("username")), unsafe_allow_html=True)
+    c2[3].markdown(field("DETECTION", a.get("final_detection")), unsafe_allow_html=True)
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div class="soc-header">
-      <div>
-        <h1>🔍 {threat[:60]}</h1>
-        <p>SOC L2 Agent · Incident Investigation · {inc_id} · {ts_now}</p>
-      </div>
-      <span class="badge {cls}" style="font-size:13px;padding:6px 14px">{dot} {sev}</span>
-    </div>""", unsafe_allow_html=True)
-
-    # ── FIX: PDF Download Section (Direct Download Button) ────────────────────
-    col_back, col_pdf, _ = st.columns([1, 1.5, 7])
-    with col_back:
-        if st.button("← Dashboard"):
-            st.switch_page("app.py")
-    
-    with col_pdf:
-        # Pre-generate AI summary — investigation report takes priority over raw chat log
-        ai_summary_parts = []
-        report_text = st.session_state.get(f"ai_report_{inc_id}")
-        if report_text:
-            ai_summary_parts.append(report_text)
-        if st.session_state.get("chat_history"):
-            chat_text = "\n\n".join(
-                f"Q: {m['content']}" if m["role"] == "user"
-                else f"A: {m['content']}"
-                for m in st.session_state.chat_history
-            )
-            ai_summary_parts.append("--- Analyst Chat Log ---\n" + chat_text)
-        ai_summary = "\n\n".join(ai_summary_parts)
-        
-        try:
-            # Generate bytes before creating the button to avoid state-loss
-            pdf_bytes = generate_pdf(a, ai_summary)
-            
-            # This is the proper Streamlit way. It won't redirect or print raw text.
-            st.download_button(
-                label="📄 Download PDF Report",
-                data=pdf_bytes,
-                file_name=f"SOC_Report_{inc_id}.pdf",
-                mime="application/pdf",
-            )
-        except Exception as e:
-            st.error(f"Failed to generate PDF: {e}")
-
-    # ── 1. Incident Metadata ─────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">📋 Incident Metadata</div>', unsafe_allow_html=True)
-    risk_col = "#cc2222" if float(str(risk)) >= 9.0 else "#b86000" if float(str(risk)) >= 7.0 else "#a08000"
-    st.markdown(f"""
-    <div class="dg">
-      {dc("Incident ID",    f'<span style="font-family:JetBrains Mono,monospace;font-weight:700;color:#4f6428">{inc_id}</span>')}
-      {dc("Status",         '<span style="color:#4f6428;font-weight:700">🟡 Under Investigation</span>')}
-      {dc("Severity",       f'<span class="badge {cls}">{dot} {sev}</span>')}
-      {dc("Risk Score",     f'<span style="font-size:20px;font-weight:800;color:{risk_col}">{risk}<span style="font-size:12px;color:#888"> /10</span></span>')}
-      {dc("Detection Tool", f'{tool}')}
-      {dc("Rule Type",      f'{rule_t}')}
-      {dc("Detection",      f'<span style="color:{col};font-weight:700">{det}</span>')}
-      {dc("Priority",       prio)}
-    </div>""", unsafe_allow_html=True)
-
-    # ── 2. Investigation Findings ─────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🔎 Investigation Findings</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="findings-box">
-      <div class="finding-row"><span class="fk">Alert Type</span><span class="fv">{threat}</span></div>
-      <div class="finding-row"><span class="fk">Severity</span><span class="fv"><span class="badge {cls}">{dot} {sev}</span></span></div>
-      <div class="finding-row"><span class="fk">Risk Score</span><span class="fv" style="color:{risk_col};font-weight:800">{risk} / 10</span></div>
-      <div class="finding-row"><span class="fk">Detection Source</span><span class="fv">{tool} ({rule_t})</span></div>
-      <div class="finding-row"><span class="fk">MITRE Technique</span><span class="fv" style="font-family:JetBrains Mono,monospace;color:#4f6428">{tech}</span></div>
-      <div class="finding-row"><span class="fk">MITRE Tactic</span><span class="fv">{tactic}</span></div>
-      <div class="finding-row"><span class="fk">Technique Name</span><span class="fv">{sub}</span></div>
-      <div class="finding-row"><span class="fk">Business Impact</span><span class="fv">{impact}</span></div>
-      <div class="finding-row"><span class="fk">Investigation Priority</span><span class="fv">{prio}</span></div>
-      <div class="finding-row"><span class="fk">Context</span><span class="fv">{ctx}</span></div>
-      <div class="finding-row"><span class="fk">Final Detection</span><span class="fv" style="color:{col};font-weight:700">{det}</span></div>
-    </div>""", unsafe_allow_html=True)
-
-    # ── 3. MITRE ATT&CK ──────────────────────────────────────────────────────
+    # ── 2. MITRE ATT&CK ───────────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">🎯 MITRE ATT&CK Mapping</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="dg cols2" style="padding:0 22px;margin-bottom:12px">
-      {dc("Technique ID",   f'<span style="font-family:JetBrains Mono,monospace;font-size:16px;font-weight:700;color:#4f6428">{tech}</span>')}
-      {dc("Technique Name", sub)}
-      {dc("Tactic Phase",   tactic)}
-      {dc("Context",        ctx)}
-    </div>""", unsafe_allow_html=True)
+    m = st.columns(2)
+    mapped = a.get("mapped_technique") not in (None, "Not mapped from supplied telemetry")
+    m[0].markdown(field("TECHNIQUE ID", a.get("mapped_technique") if mapped else None), unsafe_allow_html=True)
+    m[1].markdown(field("TECHNIQUE NAME", a.get("mitre_technique_name") if mapped else None), unsafe_allow_html=True)
+    m2 = st.columns(2)
+    m2[0].markdown(field("TACTIC", a.get("mitre_tactic") if mapped else None), unsafe_allow_html=True)
+    m2[1].markdown(field("CONTEXT", a.get("detection_reason")), unsafe_allow_html=True)
+    if not mapped:
+        st.caption("⚠️ This telemetry does not, by itself, support a confident MITRE ATT&CK mapping.")
 
-    # ── 4. Evidence / Logs ────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">📋 Detection Evidence & Logs</div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="dg" style="margin-bottom:10px">
-      {dc("Signature", sig, full=True)}
-    </div>""", unsafe_allow_html=True)
-    st.markdown(f'<div class="logs-box">{logs}</div>', unsafe_allow_html=True)
+    # ── 3. Detection Evidence & Logs ─────────────────────────────────────────
+    st.markdown('<div class="sec-heading">📄 Detection Evidence & Logs</div>', unsafe_allow_html=True)
+    e = st.columns(3)
+    e[0].markdown(field("EVENT TIME", a.get("event_time")), unsafe_allow_html=True)
+    e[1].markdown(field("HTTP METHOD", a.get("http_method")), unsafe_allow_html=True)
+    e[2].markdown(field("HTTP STATUS", a.get("http_status")), unsafe_allow_html=True)
+    e2 = st.columns(3)
+    e2[0].markdown(field("URI PATH", a.get("uri_path")), unsafe_allow_html=True)
+    e2[1].markdown(field("URI QUERY", a.get("uri_query")), unsafe_allow_html=True)
+    e2[2].markdown(field("REFERER", a.get("referer")), unsafe_allow_html=True)
 
-    # ── 5. IOC Section ─────────────────────────────────────────────────────────
+    st.markdown(f"""<div class="findings-box">
+Threat          : {a.get('threat')}
+Rule Type       : {a.get('rule_type')}
+Tool            : {a.get('tool')}
+Detection       : {a.get('final_detection')}
+Detection Reason: {a.get('detection_reason')}
+URI             : {a.get('url') or NA_TEXT}
+Raw Event       : {(str(a.get('raw_event'))[:200] + '…') if a.get('raw_event') else NA_TEXT}
+</div>""", unsafe_allow_html=True)
+
+    # ── 4. IOC Section ────────────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
-
-    def ioc_card(label, value):
-        val_html = (
-            f'<div class="ioc-val">{value}</div>'
-            if value else
-            f'<div class="ioc-val ioc-na">{NA_TEXT[:30]}…</div>'
-        )
-        return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
-
-    st.markdown(f"""
-    <div class="ioc-grid">
-      {ioc_card("Source IP",      src_ip)}
-      {ioc_card("Destination IP", dst_ip)}
-      {ioc_card("Hostname",       host)}
-      {ioc_card("Username",       user)}
-      {ioc_card("Process",        proc)}
-      {ioc_card("Domain",         domain)}
-      {ioc_card("URL",            url)}
-      {ioc_card("File Hash",      fhash)}
-      {ioc_card("Filename",       fname)}
+    st.markdown(f"""<div class="ioc-grid">
+      {ioc_card("Source IP",      a.get("source_ip"))}
+      {ioc_card("Destination IP", None)}
+      {ioc_card("Hostname",       a.get("hostname"))}
+      {ioc_card("Username",       a.get("username"))}
+      {ioc_card("Process",        None)}
+      {ioc_card("Domain",         a.get("domain"))}
+      {ioc_card("URL",            a.get("url"))}
+      {ioc_card("File Hash",      None)}
+      {ioc_card("Filename",       a.get("filename"))}
     </div>""", unsafe_allow_html=True)
-    st.caption("⚠️ Current dataset does not include forensic IOC fields (IP/host/user). "
-               "Populated automatically once the Splunk/log source provides them.")
+    st.caption("Fields shown as unavailable genuinely are not present in this event's telemetry — nothing here is fabricated.")
 
-    # ── 6. Incident Timeline ──────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">⏱️ Incident Timeline</div>', unsafe_allow_html=True)
-    dot_cls = SEV_CLS.get(sev, "sev-L").replace("sev-", "")
-    timeline_events = [
-        (ts_now, f"Alert Detected — {threat}", tool, "DETECTION EVENT"),
-        (ts_now, f"Severity Assessed — {sev} | Risk: {risk}/10", "SOC Pipeline", "CLASSIFICATION"),
-        (ts_now, f"MITRE Mapped — {tech} ({tactic})", "MITRE Engine", "MAPPING"),
-        (ts_now, f"Investigation Opened — {inc_id}", "SOC L2 Agent", "INVESTIGATION"),
-    ]
-    rows = "".join(
-        f'<div class="tl-row">'
-        f'<div class="tl-dot {dot_cls}"></div>'
-        f'<div class="tl-time">{t}</div>'
-        f'<div><div class="tl-event">{ev}</div><div class="tl-src">{src} · {sig_}</div></div>'
-        f'</div>'
-        for t, ev, src, sig_ in timeline_events
-    )
-    st.markdown(f'<div class="timeline">{rows}</div>', unsafe_allow_html=True)
-    st.caption("⚠️ Timeline shows detection events only. Forensic timestamps not available in current telemetry.")
+    # ── 5. Business Impact & Recommendations ─────────────────────────────────
+    st.markdown('<div class="sec-heading">💼 Business Impact & SOC Recommendations</div>', unsafe_allow_html=True)
+    st.markdown(field("BUSINESS IMPACT", a.get("business_impact")), unsafe_allow_html=True)
+    st.markdown(field("INVESTIGATION PRIORITY", a.get("investigation_priority")), unsafe_allow_html=True)
+    rec = get_recommendations(a.get("mitre_tactic"), a.get("severity"))
+    st.markdown("**Investigation Steps:**")
+    for step in rec.get("investigation", []):
+        st.markdown(f"- {step}")
+    st.markdown("**Containment Actions:**")
+    for step in rec.get("containment", []):
+        st.markdown(f"- {step}")
+    st.markdown("**Remediation Steps:**")
+    for step in rec.get("remediation", []):
+        st.markdown(f"- {step}")
 
-    # ── 7. Business Impact ────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">💼 Business Impact</div>', unsafe_allow_html=True)
-    impact_desc = {
-        "Very High": (
-            f"**Critical business risk.** The threat '{threat}' ({tactic} via {tech}) "
-            f"poses a potential risk to credentials, sensitive data, or business operations. "
-            f"Immediate executive escalation and incident response activation recommended."
-        ),
-        "High": (
-            f"**Significant security risk.** '{threat}' classified under {tactic} represents "
-            f"a high-priority threat requiring immediate investigation and containment. "
-            f"Potential for unauthorized access or data exposure."
-        ),
-        "Moderate": (
-            f"**Suspicious activity requiring investigation.** '{threat}' ({tech}) indicates "
-            f"potentially malicious behavior. Limited confirmed impact at detection time, "
-            f"but escalation possible without timely response."
-        ),
-        "Low": (
-            f"**Low-confidence or low-impact activity.** '{threat}' requires monitoring "
-            f"and investigation when capacity allows. Unlikely to cause immediate damage "
-            f"but should not be dismissed."
-        ),
-    }.get(impact,
-        f"Business impact for '{threat}' assessed as {impact}. "
-        f"Review based on {tactic} tactic and organizational context."
-    )
-    st.markdown(f"""
-    <div style="background:var(--paper);border:1px solid #ddd5c8;border-left:4px solid {col};
-      border-radius:12px;padding:14px 18px;margin:0 22px 12px">
-      <div style="font-size:12px;line-height:1.7;color:var(--dark)">{impact_desc}</div>
-    </div>""", unsafe_allow_html=True)
-
-    # ── 8. SOC Analyst Recommendations ───────────────────────────────────────
-    st.markdown('<div class="sec-heading">🛡️ SOC Analyst Recommendations</div>', unsafe_allow_html=True)
-    recs = get_recommendations(tactic)
-
-    rec_sections = [
-        ("🔍 Investigation",   recs["investigation"], "#4f6428"),
-        ("🚨 Containment",     recs["containment"],   "#8b0000"),
-        ("✅ Remediation",     recs["remediation"],   "#2a5a2a"),
-    ]
-    for title, steps, color in rec_sections:
-        st.markdown(
-            f'<div style="font-size:13px;font-weight:800;color:{color};'
-            f'margin:8px 22px 4px">{title}</div>',
-            unsafe_allow_html=True
-        )
-        items = "".join(
-            f'<div class="rec-item">'
-            f'<div class="rec-num">{i+1}.</div>'
-            f'<div class="rec-text">{step}</div>'
-            f'</div>'
-            for i, step in enumerate(steps)
-        )
-        st.markdown(f'<div class="rec-section">{items}</div>', unsafe_allow_html=True)
-
-    # ── 8b. AI Investigation Report (one-shot, distinct from chat) ────────────
+    # ── 6. AI Investigation Report ────────────────────────────────────────────
     st.markdown('<div class="sec-heading">🧠 AI Investigation Report</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="ai-label">⚠️ AI-generated report. Verify against telemetry before acting.</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown('<div class="ai-label">⚠️ AI-generated report. Verify against telemetry before acting.</div>', unsafe_allow_html=True)
 
     report_key = f"ai_report_{inc_id}"
     if report_key not in st.session_state:
@@ -439,86 +156,70 @@ def main():
 
     if st.session_state[report_key] is None:
         if st.button("🧠 Generate AI Investigation Report"):
-            with st.spinner("🛡 Generating executive summary, root cause & recommendations…"):
+            with st.spinner("Generating executive summary, root cause & recommendations…"):
                 try:
                     st.session_state[report_key] = _get_investigator().investigate(a)
-                except Exception as e:
-                    st.session_state[report_key] = f"Error generating report: {e}"
+                except Exception as ex:
+                    st.session_state[report_key] = f"Error generating report: {ex}"
             st.rerun()
     else:
         st.markdown(
-            f'<div class="findings-box" style="white-space:pre-wrap;line-height:1.7;'
-            f'font-size:13px">{st.session_state[report_key]}</div>',
-            unsafe_allow_html=True
+            f'<div class="findings-box" style="white-space:pre-wrap;line-height:1.7;font-size:13px">'
+            f'{st.session_state[report_key]}</div>',
+            unsafe_allow_html=True,
         )
         if st.button("🔄 Regenerate Report"):
             st.session_state[report_key] = None
             st.rerun()
 
-    # ── 9. SOC AI Chatbot ─────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🤖 SOC AI Analyst Assistant</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="ai-label">⚠️ SOC AI Analysis — AI-generated content. '
-        'Verify against telemetry before acting.</div>',
-        unsafe_allow_html=True
-    )
-
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-
-    bubbles = "".join(
-        chat_bubble(m["role"], m["content"])
-        for m in st.session_state.chat_history
-    )
-    placeholder = (
-        "<div style='color:#a08060;font-size:13px;text-align:center;margin:auto'>"
-        "Ask the SOC AI about this alert…"
-        "</div>"
-    )
-    st.markdown(
-        f'<div class="chat-wrap"><div class="chat-body">'
-        f'{bubbles or placeholder}'
-        f'</div></div>',
-        unsafe_allow_html=True
-    )
-
-    ci, cs, cc = st.columns([6, 1, 1])
-    with ci:
-        # FIX: Added "Ask SOC AI" label to resolve the Empty Label warning
-        q = st.text_input(
-            "Ask SOC AI", 
-            placeholder="e.g. What should the SOC analyst do next?",
-            label_visibility="collapsed", key="chat_input"
+    # ── 7. PDF Download ───────────────────────────────────────────────────────
+    st.markdown('<div class="sec-heading">📑 Incident Report</div>', unsafe_allow_html=True)
+    ai_summary_parts = []
+    report_text = st.session_state.get(report_key)
+    if report_text:
+        ai_summary_parts.append(report_text)
+    chat_key = f"chat_history_{inc_id}"
+    if st.session_state.get(chat_key):
+        chat_text = "\n\n".join(
+            f"Q: {m['content']}" if m["role"] == "user" else f"A: {m['content']}"
+            for m in st.session_state[chat_key]
         )
-    with cs:
-        send = st.button("Send ➤")
-    with cc:
-        if st.button("🗑 Clear"):
-            st.session_state.chat_history = []
-            st.rerun()
+        ai_summary_parts.append("--- Analyst Chat Log ---\n" + chat_text)
+    ai_summary = "\n\n".join(ai_summary_parts)
 
-    if send and q.strip():
-        st.session_state.chat_history.append({"role": "user", "content": q.strip()})
-        with st.spinner("🛡 SOC AI analysing…"):
-            try:
-                reply = _get_chatbot().ask(
-                    q.strip(), a, logs,
-                    history=st.session_state.chat_history[:-1]  
-                )
-            except Exception as e:
-                reply = f"Error: {e}"
-        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-        st.rerun()
+    try:
+        report_data = build_report_data(a, ai_summary)
+        pdf_bytes = generate_pdf(report_data)
+        st.download_button(
+            "⬇️ Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"SOC_Report_{inc_id}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as ex:
+        st.error(f"PDF generation failed: {ex}")
 
-    # ── Footer ────────────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="text-align:center;padding:22px;color:saddlebrown;font-weight:700;
-      border-top:2px solid #ddd5c8;margin-top:18px">
-      🛡️ SOC L2 Agent · Blue Team Defence Intelligence Dashboard
-      <br><small style="color:gray">
-        Developed by Drashya Desai · Helee Mistry · Tanmay Pramar
-      </small>
-    </div>""", unsafe_allow_html=True)
+    # ── 8. SOC AI Chatbot ─────────────────────────────────────────────────────
+    st.markdown('<div class="sec-heading">💬 SOC AI Chat Assistant</div>', unsafe_allow_html=True)
+    st.caption("Incident-aware — answers are grounded in THIS alert's telemetry only.")
 
-if __name__ == "__main__":
-    main()
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []
+
+    for msg in st.session_state[chat_key]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    question = st.chat_input("Ask about this incident…")
+    if question:
+        st.session_state[chat_key].append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking…"):
+                answer = _get_chatbot().ask(question, a, st.session_state[chat_key])
+            st.markdown(answer)
+        st.session_state[chat_key].append({"role": "assistant", "content": answer})
+
+
+main()

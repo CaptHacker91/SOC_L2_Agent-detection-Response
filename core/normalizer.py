@@ -3,98 +3,78 @@ import pandas as pd
 
 class DataNormalizer:
     """
-    Normalize Splunk events while preserving all original Splunk fields.
-    Adds derived SOC fields only when they can be supported by the event data.
+    Converts parsed records into a DataFrame.
+
+    IMPORTANT: every original source column (real Splunk field or
+    synthetic SOC field) is preserved untouched. This class ADDS a
+    set of normalized fields on top, so the rest of the app has a
+    stable interface regardless of which source schema produced the
+    row:
+
+        source_ip, hostname, username, url, domain, event_time,
+        filename, uri_path, uri_query, http_method, http_status,
+        referer, user_agent, raw_event
+
+    A value is left as None when the source event genuinely does not
+    contain the corresponding data — never fabricated.
+
+    Mapping (per the real access_combined_wcookie schema):
+        source_ip  <- clientip
+        hostname   <- host
+        username   <- user            ("-" is treated as unavailable)
+        url        <- uri
+        domain     <- referer_domain, falling back to referer
+        event_time <- _time
+        filename   <- file, falling back to uri_path
     """
 
     def normalize(self, parsed_data):
         df = pd.DataFrame(parsed_data)
-
         if df.empty:
             return df
 
-        # Preserve every original Splunk field.
-        df.columns = [
-            str(column).lower().strip().replace(" ", "_")
-            for column in df.columns
-        ]
+        df.columns = [c.lower().strip().replace(" ", "_") for c in df.columns]
 
-        df = df.fillna("")
-        df = df.drop_duplicates().reset_index(drop=True)
+        df["source_ip"]   = self._col(df, "clientip")
+        df["hostname"]    = self._col(df, "host")
+        df["username"]    = self._col(df, "user").apply(self._clean_user)
+        df["url"]         = self._col(df, "uri")
+        df["uri_path"]    = self._col(df, "uri_path")
+        df["uri_query"]   = self._col(df, "uri_query")
+        df["http_method"] = self._col(df, "method")
+        df["http_status"] = pd.to_numeric(self._col(df, "status"), errors="coerce")
+        df["referer"]     = self._col(df, "referer")
+        df["domain"]      = self._col(df, "referer_domain").where(
+            self._col(df, "referer_domain").notna(), self._col(df, "referer")
+        )
+        df["user_agent"]  = self._col(df, "useragent")
+        df["event_time"]  = self._col(df, "_time")
+        df["raw_event"]   = self._col(df, "_raw")
+        df["filename"]    = df.apply(self._pick_filename, axis=1)
 
-        # Stable event ID without destroying original Splunk fields.
-        if "id" not in df.columns:
-            df["id"] = range(1, len(df) + 1)
-
-        # Defaults for SOC pipeline.
-        df["threat"] = "Normal Event"
-        df["rule_type"] = "No Security Rule"
-        df["signature"] = ""
-        df["tool"] = ""
-        df["mapped_technique"] = ""
-        df["detection_reason"] = ""
-        df["derived_risk_score"] = 0.0
-
-        for i, row in df.iterrows():
-            sourcetype = str(row.get("sourcetype", "")).lower()
-            uri = str(row.get("uri", "")).lower()
-            uri_path = str(row.get("uri_path", "")).lower()
-            status = str(row.get("status", ""))
-
-            # vendor_sales is business telemetry, not automatically a threat.
-            if sourcetype == "vendor_sales":
-                df.at[i, "threat"] = "Normal Business Event"
-                df.at[i, "rule_type"] = "Business Telemetry"
-                df.at[i, "signature"] = str(row.get("_raw", ""))
-                df.at[i, "tool"] = "vendor_sales"
-                continue
-
-            # Web-access telemetry.
-            if sourcetype == "access_combined_wcookie":
-                df.at[i, "tool"] = "Web Access Log"
-
-                # Actual suspicious file request present in the supplied dataset.
-                if "/rush/signals.zip" in uri or "/rush/signals.zip" in uri_path:
-                    df.at[i, "threat"] = "Suspicious File Access"
-                    df.at[i, "rule_type"] = "Suspicious Web Resource"
-                    df.at[i, "signature"] = uri
-                    df.at[i, "mapped_technique"] = "T1105"
-                    df.at[i, "detection_reason"] = (
-                        "Request targeted /rush/signals.zip"
-                    )
-                    df.at[i, "derived_risk_score"] = 9.2
-                    continue
-
-                # HTTP 500/503/505 = server-side error anomaly.
-                if status in {"500", "503", "505"}:
-                    df.at[i, "threat"] = "Web Server Error Anomaly"
-                    df.at[i, "rule_type"] = "HTTP Error Detection"
-                    df.at[i, "signature"] = f"{status} {uri}"
-                    df.at[i, "detection_reason"] = (
-                        f"HTTP status {status} observed for web request"
-                    )
-                    df.at[i, "derived_risk_score"] = 5.5
-                    continue
-
-                # 403 = access-control event.
-                if status == "403":
-                    df.at[i, "threat"] = "Unauthorized Web Access"
-                    df.at[i, "rule_type"] = "Access Control Detection"
-                    df.at[i, "signature"] = f"{status} {uri}"
-                    df.at[i, "detection_reason"] = (
-                        "HTTP 403 access-denied response"
-                    )
-                    df.at[i, "derived_risk_score"] = 7.2
-                    continue
-
-                # Other client-side malformed/error responses.
-                if status in {"400", "404", "406", "408"}:
-                    df.at[i, "threat"] = "Malformed Web Request"
-                    df.at[i, "rule_type"] = "HTTP Anomaly Detection"
-                    df.at[i, "signature"] = f"{status} {uri}"
-                    df.at[i, "detection_reason"] = (
-                        f"HTTP status {status} observed"
-                    )
-                    df.at[i, "derived_risk_score"] = 4.5
-
+        df.drop_duplicates(inplace=True)
         return df
+
+    @staticmethod
+    def _col(df, name):
+        """Returns df[name] if it exists, else an all-None Series of matching length/index."""
+        if name in df.columns:
+            return df[name]
+        return pd.Series([None] * len(df), index=df.index)
+
+    @staticmethod
+    def _clean_user(val):
+        if val is None:
+            return None
+        val = str(val).strip()
+        return None if val in ("", "-", "nan", "None") else val
+
+    @staticmethod
+    def _pick_filename(row):
+        f = row.get("file")
+        if f and str(f).strip() not in ("", "nan", "None"):
+            return f
+        up = row.get("uri_path")
+        if up and str(up).strip() not in ("", "nan", "None"):
+            return up
+        return None

@@ -1,489 +1,190 @@
-"""
-Report Service - PDF Incident Report Generator
-BUG FIX: All unicode/emoji chars stripped before writing to PDF (latin-1 safe).
-Uses fpdf2 with Helvetica font (built-in, no external font file needed).
-"""
-import re
-from datetime import datetime
+from datetime import datetime, timezone
 from fpdf import FPDF
 
+NA_TEXT = "Not available in supplied telemetry"
 
-# ── Unicode sanitizer ──────────────────────────────────────────────────────────
-def _safe(text: str, max_len: int = 400) -> str:
-    """
-    Strip all non-latin-1 characters (emojis, unicode symbols) so fpdf
-    never raises 'latin-1 codec can't encode character' error.
-    Replaces emojis with ASCII equivalents where possible.
-    """
-    if not text:
-        return "Not available in supplied telemetry"
-
-    replacements = {
-        # Common emojis in SOC context
-        "🔴": "[CRITICAL]", "🟠": "[HIGH]", "🟡": "[MEDIUM]", "🟢": "[LOW]",
-        "🛡️": "[SOC]", "🛡": "[SOC]", "🔍": "[INVESTIGATE]", "⚠️": "[WARNING]",
-        "⚠": "[WARNING]", "❌": "[ERROR]", "✅": "[OK]", "📋": "[LOG]",
-        "🎯": "[TARGET]", "💼": "[BUSINESS]", "🤖": "[AI]", "📄": "[REPORT]",
-        "⏱️": "[TIMELINE]", "⏱": "[TIMELINE]", "🚨": "[ALERT]",
-        "👨\u200d💻": "[DEV]", "✦": "*", "✧": "*",
-        # Common unicode punctuation
-        "\u2014": "-", "\u2013": "-", "\u2022": "-",
-        "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-        "\u2026": "...", "\u00b7": ".", "\u00d7": "x",
-    }
-
-    for orig, repl in replacements.items():
-        text = text.replace(orig, repl)
-
-    # Strip any remaining non-latin-1 characters
-    text = text.encode("latin-1", errors="ignore").decode("latin-1")
-
-    return text[:max_len]
-
-
-def _na(val) -> str:
-    if val in (None, "", "-", "N/A", "—"):
-        return "Not available in supplied telemetry"
-    return _safe(str(val))
-
-
-# ── Recommendations by tactic ──────────────────────────────────────────────────
-_RECS = {
-    "Credential Access": {
-        "investigation": [
-            "Identify the affected endpoint and user account",
-            "Review process creation events around detection time",
-            "Check for credential-dumping tools (mimikatz, procdump, etc.)",
-            "Determine whether credentials were successfully exfiltrated",
-        ],
-        "containment": [
-            "Isolate the affected endpoint from the network",
-            "Disable the compromised user account immediately",
-            "Force password reset for all accounts on affected host",
-            "Block C2 IPs/domains at firewall if identified",
-        ],
-        "remediation": [
-            "Reset all potentially compromised credentials",
-            "Enable MFA on all privileged accounts",
-            "Deploy credential guard (Windows LSASS protection)",
-            "Audit and tighten privileged access management",
-        ],
-    },
+# tactic -> (investigation, containment, remediation) step lists.
+# Falls back to a generic-but-honest set when the tactic is unmapped.
+_RECOMMENDATIONS = {
     "Execution": {
-        "investigation": [
-            "Review script execution logs (PowerShell, WMI, CMD)",
-            "Identify parent process and full execution chain",
-            "Check for encoded or obfuscated commands",
-            "Determine what payload was executed and its origin",
-        ],
-        "containment": [
-            "Isolate affected endpoint immediately",
-            "Kill malicious processes identified in logs",
-            "Block execution path at EDR level",
-            "Preserve memory dump for forensic analysis",
-        ],
-        "remediation": [
-            "Apply PowerShell Constrained Language Mode",
-            "Enable Script Block Logging across all endpoints",
-            "Deploy application allowlisting (AppLocker/WDAC)",
-            "Patch vulnerable applications",
-        ],
+        "investigation": ["Review process execution logs on the affected host",
+                           "Identify parent process and command-line arguments"],
+        "containment": ["Isolate affected host from the network if activity is ongoing",
+                         "Kill the suspicious process if still running"],
+        "remediation": ["Patch or remove the vulnerable execution path",
+                         "Apply application allow-listing where feasible"],
     },
-    "Lateral Movement": {
-        "investigation": [
-            "Map all systems the attacker accessed from origin host",
-            "Review authentication logs for suspicious logons",
-            "Check SMB/RDP/WinRM activity from affected host",
-            "Identify pivot points and credential reuse patterns",
-        ],
-        "containment": [
-            "Segment affected network zones",
-            "Block lateral movement protocols at internal firewall",
-            "Disable compromised accounts used for movement",
-            "Reset all credentials on affected systems",
-        ],
-        "remediation": [
-            "Implement network micro-segmentation",
-            "Enforce least-privilege access model",
-            "Deploy privileged access workstations (PAWs)",
-            "Enable enhanced audit logging on all servers",
-        ],
+    "Credential Access": {
+        "investigation": ["Review authentication logs for the affected account",
+                           "Check for lateral movement using the credential"],
+        "containment": ["Force password reset for the affected account",
+                         "Revoke active sessions/tokens for the account"],
+        "remediation": ["Enable MFA on the affected account",
+                         "Audit credential storage and LSASS protections"],
     },
     "Impact": {
-        "investigation": [
-            "Identify scope of data encrypted, deleted, or disrupted",
-            "Check for lateral spread to additional systems",
-            "Locate original infection vector",
-            "Determine if backups are intact and unaffected",
-        ],
-        "containment": [
-            "Isolate ALL affected systems immediately",
-            "Disconnect from network to prevent further spread",
-            "Preserve forensic evidence before remediation",
-            "Engage incident response team and management",
-        ],
-        "remediation": [
-            "Restore from verified clean backups",
-            "Rebuild affected systems from golden image",
-            "Patch vulnerability used for initial access",
-            "Conduct full threat hunt across entire environment",
-        ],
+        "investigation": ["Determine scope of affected systems/files",
+                           "Identify initial access vector"],
+        "containment": ["Isolate affected systems immediately",
+                         "Disable network shares to prevent spread"],
+        "remediation": ["Restore from known-clean backups",
+                         "Patch the exploited vulnerability before restoring connectivity"],
     },
     "Command and Control": {
-        "investigation": [
-            "Identify all C2 communication endpoints (IPs, domains)",
-            "Review DNS query logs for beaconing patterns",
-            "Check which process is responsible for C2 traffic",
-            "Determine dwell time (how long C2 was active)",
-        ],
-        "containment": [
-            "Block C2 IPs and domains at perimeter firewall",
-            "Isolate affected host from network",
-            "Kill C2 process on affected endpoint",
-            "Sinkhole malicious domains if possible",
-        ],
-        "remediation": [
-            "Perform full threat hunt for similar implants",
-            "Review and tighten egress filtering rules",
-            "Deploy DNS security (RPZ / DNS filtering)",
-            "Update threat intelligence feeds",
-        ],
+        "investigation": ["Review outbound connections from the affected host",
+                           "Identify the destination and payload delivered"],
+        "containment": ["Block the destination IP/domain at the perimeter",
+                         "Isolate the affected host"],
+        "remediation": ["Remove the delivered payload",
+                         "Review perimeter egress filtering rules"],
     },
     "Initial Access": {
-        "investigation": [
-            "Identify the entry vector (phishing, exploit, valid credentials)",
-            "Review email gateway logs if phishing is suspected",
-            "Check vulnerable services exposed to the internet",
-            "Determine what was accessed post-compromise",
-        ],
-        "containment": [
-            "Block identified malicious sender, IP, or domain",
-            "Patch exploited vulnerability immediately",
-            "Reset credentials if valid accounts were abused",
-            "Enable enhanced monitoring on entry points",
-        ],
-        "remediation": [
-            "Patch all internet-facing systems",
-            "Deploy email security gateway with sandboxing",
-            "Implement MFA on all external-facing systems",
-            "Conduct security awareness training",
-        ],
-    },
-    "Defense Evasion": {
-        "investigation": [
-            "Identify what security controls were bypassed",
-            "Check for log clearing or tampering events (Event ID 1102)",
-            "Review process injection and hollowing indicators",
-            "Determine what the attacker was attempting to conceal",
-        ],
-        "containment": [
-            "Isolate affected endpoint",
-            "Restore tampered logs from SIEM backup",
-            "Kill identified evasion processes",
-            "Enable additional monitoring for bypass techniques",
-        ],
-        "remediation": [
-            "Enable tamper-protected audit logging",
-            "Deploy EDR with process injection detection",
-            "Implement log forwarding to immutable SIEM",
-            "Review and harden security tool configurations",
-        ],
-    },
-    "Discovery": {
-        "investigation": [
-            "Identify what reconnaissance was performed",
-            "Review which systems and accounts were queried",
-            "Determine if discovery led to further attack stages",
-            "Check for automated scanning tools or scripts",
-        ],
-        "containment": [
-            "Isolate affected endpoint if active threat is confirmed",
-            "Block suspicious scanning activity at network level",
-            "Review and restrict access rights of involved accounts",
-        ],
-        "remediation": [
-            "Implement network segmentation to limit discovery scope",
-            "Deploy deception technologies (honeypots, honey tokens)",
-            "Enable enhanced audit logging for directory service queries",
-        ],
-    },
-    "Exfiltration": {
-        "investigation": [
-            "Quantify the volume of data exfiltrated",
-            "Identify the destination of exfiltrated data",
-            "Determine which data categories were exposed",
-            "Check compliance and regulatory notification requirements",
-        ],
-        "containment": [
-            "Block exfiltration channels at perimeter firewall",
-            "Isolate all affected systems immediately",
-            "Engage legal and compliance team",
-            "Preserve all network logs for investigation",
-        ],
-        "remediation": [
-            "Deploy Data Loss Prevention (DLP) solution",
-            "Implement strict egress filtering",
-            "Classify and protect sensitive data assets",
-            "Notify affected parties per applicable regulations",
-        ],
+        "investigation": ["Review the full request/response for the affected endpoint",
+                           "Check for repeated attempts from the same source IP"],
+        "containment": ["Rate-limit or block the source IP if abuse continues",
+                         "Review WAF/reverse-proxy rules for the targeted path"],
+        "remediation": ["Patch the targeted application endpoint",
+                         "Add input validation for the parameters involved"],
     },
 }
 
-_DEFAULT_RECS = {
-    "investigation": [
-        "Review all available logs related to this alert",
-        "Identify affected systems and users",
-        "Determine the attack timeline and scope",
-        "Assess potential business impact",
-    ],
-    "containment": [
-        "Isolate affected systems if active threat is confirmed",
-        "Block identified malicious indicators at firewall",
-        "Disable compromised accounts as a precaution",
-    ],
-    "remediation": [
-        "Patch identified vulnerabilities",
-        "Restore affected systems from clean backup",
-        "Enhance monitoring for similar future threats",
-        "Update detection rules based on findings",
-    ],
+_GENERIC_RECOMMENDATIONS = {
+    "investigation": ["Review all available logs related to this event",
+                       "Correlate with other events from the same source IP/host"],
+    "containment": ["Monitor the source for repeated activity",
+                     "Escalate to L3 if activity persists or escalates"],
+    "remediation": ["No confirmed remediation required based on current evidence",
+                     "Re-evaluate if additional corroborating evidence appears"],
 }
 
 
-def get_recommendations(tactic: str) -> dict:
-    return _RECS.get(tactic, _DEFAULT_RECS)
+def get_recommendations(mitre_tactic, severity):
+    return _RECOMMENDATIONS.get(mitre_tactic, _GENERIC_RECOMMENDATIONS)
 
 
-def build_report_data(alert: dict) -> dict:
+def build_report_data(alert: dict, ai_summary: str = "") -> dict:
+    """Single source of truth for what goes in the PDF — same object shape used by the UI."""
+    rec = get_recommendations(alert.get("mitre_tactic"), alert.get("severity"))
     return {
-        "incident_id":    f"INC-{str(alert.get('id', '000')).zfill(4)}",
-        "timestamp":      datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "threat":         _na(alert.get("threat")),
-        "severity":       _na(alert.get("severity")),
-        "risk_score":     _na(alert.get("risk_score")),
-        "detection":      _na(alert.get("final_detection")),
-        "tool":           _na(alert.get("tool")),
-        "rule_type":      _na(alert.get("rule_type")),
-        "signature":      _na(alert.get("signature")),
-        "technique":      _na(alert.get("mapped_technique")),
-        "technique_name": _na(alert.get("mitre_sub_name")),
-        "tactic":         _na(alert.get("mitre_tactic")),
-        "context":        _na(alert.get("context")),
-        "impact":         _na(alert.get("business_impact")),
-        "priority":       _na(alert.get("investigation_priority")),
-        "source_ip":      _na(alert.get("source_ip")),
-        "dest_ip":        _na(alert.get("destination_ip")),
-        "hostname":       _na(alert.get("hostname")),
-        "username":       _na(alert.get("username")),
-        "process":        _na(alert.get("process_name")),
-        "domain":         _na(alert.get("domain")),
-        "url":            _na(alert.get("url")),
-        "file_hash":      _na(alert.get("file_hash")),
-        "filename":       _na(alert.get("filename")),
+        "incident_id": alert.get("id"),
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "threat": alert.get("threat") or NA_TEXT,
+        "severity": alert.get("severity") or NA_TEXT,
+        "risk_score": alert.get("risk_score"),
+        "final_detection": alert.get("final_detection") or NA_TEXT,
+        "detection_reason": alert.get("detection_reason") or NA_TEXT,
+        "mitre_technique": alert.get("mapped_technique") or NA_TEXT,
+        "mitre_technique_name": alert.get("mitre_technique_name") or NA_TEXT,
+        "mitre_tactic": alert.get("mitre_tactic") or NA_TEXT,
+        "source_ip": alert.get("source_ip") or NA_TEXT,
+        "hostname": alert.get("hostname") or NA_TEXT,
+        "username": alert.get("username") or NA_TEXT,
+        "url": alert.get("url") or NA_TEXT,
+        "uri_path": alert.get("uri_path") or NA_TEXT,
+        "http_method": alert.get("http_method") or NA_TEXT,
+        "http_status": alert.get("http_status") if alert.get("http_status") is not None else NA_TEXT,
+        "business_impact": alert.get("business_impact") or NA_TEXT,
+        "investigation_priority": alert.get("investigation_priority") or NA_TEXT,
+        "investigation_steps": rec["investigation"],
+        "containment_actions": rec["containment"],
+        "remediation_steps": rec["remediation"],
+        "ai_summary": ai_summary or "Not generated for this report.",
     }
 
 
-# ── PDF Generator ──────────────────────────────────────────────────────────────
-class SOCReportPDF(FPDF):
-
-    def header(self):
-        self.set_fill_color(79, 100, 40)
-        self.rect(0, 0, 210, 16, "F")
-        self.set_font("Helvetica", "B", 10)
-        self.set_text_color(255, 255, 255)
-        self.set_xy(0, 3)
-        self.cell(210, 10, "SOC L2 Agent - Incident Investigation Report", align="C")
-        self.set_text_color(0, 0, 0)
-        self.ln(13)
-
-    def footer(self):
-        self.set_y(-12)
-        self.set_font("Helvetica", "", 8)
-        self.set_text_color(120, 90, 60)
-        self.cell(0, 6, f"SOC L2 Agent | Page {self.page_no()} | CONFIDENTIAL", align="C")
-
-    def section_title(self, title: str):
-        self.set_font("Helvetica", "B", 11)
-        self.set_fill_color(220, 232, 196)
-        self.set_text_color(79, 100, 40)
-        w = self.w - self.l_margin - self.r_margin
-        self.cell(w, 7, f"  {_safe(title)}", ln=True, fill=True)
-        self.set_text_color(0, 0, 0)
-        self.ln(2)
-
-    def kv(self, key: str, value: str, key_w: int = 50):
-        avail = self.w - self.l_margin - self.r_margin
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(90, 60, 20)
-        self.cell(key_w, 6, f"{_safe(key, 40)}:", ln=False)
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(0, 0, 0)
-        self.multi_cell(avail - key_w, 6, _safe(value))
-
-    def bullet(self, text: str):
-        avail = self.w - self.l_margin - self.r_margin
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(40, 40, 40)
-        self.cell(6, 6, "-", ln=False)
-        self.multi_cell(avail - 6, 6, _safe(text))
+def _sanitize(text) -> str:
+    """fpdf2's default core fonts are Latin-1 only — strip characters they can't render."""
+    return str(text).encode("latin-1", "replace").decode("latin-1")
 
 
-def generate_pdf(alert: dict, ai_summary: str = "") -> bytes:
-    """
-    Generate PDF incident report. Returns bytes for st.download_button.
-    BUG FIX: All text passes through _safe() which strips non-latin-1 chars.
-    """
-    r    = build_report_data(alert)
-    recs = get_recommendations(alert.get("mitre_tactic", ""))
-    now  = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    pdf = SOCReportPDF()
-    pdf.set_auto_page_break(auto=True, margin=14)
+def generate_pdf(report_data: dict) -> bytes:
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.set_margins(14, 20, 14)
 
-    # Title
-    pdf.set_font("Helvetica", "B", 15)
-    pdf.set_text_color(79, 100, 40)
-    avail = pdf.w - pdf.l_margin - pdf.r_margin
-    pdf.cell(avail, 9, "INCIDENT INVESTIGATION REPORT", ln=True, align="C")
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, _sanitize("SOC L2 Agent - Incident Investigation Report"), ln=True, align="C")
     pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(100, 80, 40)
-    pdf.cell(avail, 6, f"Generated: {now}  |  Incident: {r['incident_id']}", ln=True, align="C")
+    pdf.cell(0, 6, _sanitize(f"Generated: {report_data['generated_at']} | Incident: {report_data['incident_id']}"), ln=True, align="C")
     pdf.ln(4)
 
-    # 1. Executive Summary
-    pdf.section_title("1. Executive Summary")
-    summary = (
-        f"A {r['severity']}-severity security event '{r['threat']}' was detected by {r['tool']} "
-        f"({r['rule_type']} rule). Detection result: '{r['detection']}'. "
-        f"Risk score: {r['risk_score']}/10. "
-        f"MITRE technique {r['technique']} ({r['technique_name']}) under {r['tactic']} tactic. "
-        f"Business impact: {r['impact']}. Priority: {r['priority']}."
-    )
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(avail, 6, _safe(summary))
-    pdf.ln(3)
+    def section(title):
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_fill_color(220, 232, 196)
+        pdf.cell(0, 8, _sanitize(title), ln=True, fill=True)
+        pdf.set_font("Helvetica", "", 10)
 
-    # 2. Incident Metadata
-    pdf.section_title("2. Incident Metadata")
-    for k, v in [
-        ("Incident ID",    r["incident_id"]),
-        ("Generated",      r["timestamp"]),
-        ("Threat",         r["threat"]),
-        ("Severity",       r["severity"]),
-        ("Risk Score",     f"{r['risk_score']} / 10"),
-        ("Detection",      r["detection"]),
-        ("Detection Tool", r["tool"]),
-        ("Rule Type",      r["rule_type"]),
-        ("Status",         "Under Investigation"),
-        ("Priority",       r["priority"]),
-    ]:
-        pdf.kv(k, v)
-    pdf.ln(3)
+    def kv(label, value):
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(45, 6, _sanitize(f"{label}:"))
+        pdf.set_font("Helvetica", "", 10)
+        pdf.multi_cell(0, 6, _sanitize(value))
 
-    # 3. MITRE ATT&CK
-    pdf.section_title("3. MITRE ATT&CK Mapping")
-    for k, v in [
-        ("Technique ID",   r["technique"]),
-        ("Technique Name", r["technique_name"]),
-        ("Tactic",         r["tactic"]),
-        ("Context",        r["context"]),
-    ]:
-        pdf.kv(k, v)
-    pdf.ln(3)
+    section("1. Executive Summary")
+    pdf.multi_cell(0, 6, _sanitize(
+        f"A {report_data['severity']}-severity security event '{report_data['threat']}' was detected. "
+        f"Detection result: '{report_data['final_detection']}'. Risk score: {report_data['risk_score']}/10. "
+        f"MITRE technique {report_data['mitre_technique']} ({report_data['mitre_technique_name']}) under "
+        f"{report_data['mitre_tactic']} tactic. Business impact: {report_data['business_impact']}. "
+        f"Priority: {report_data['investigation_priority']}."
+    ))
 
-    # 4. Detection Evidence
-    pdf.section_title("4. Detection Evidence")
-    pdf.kv("Signature", r["signature"])
-    pdf.ln(3)
+    section("2. Incident Metadata")
+    kv("Incident ID", report_data["incident_id"])
+    kv("Generated", report_data["generated_at"])
 
-    # 5. IOC
-    pdf.section_title("5. Indicators of Compromise (IOC)")
-    for k, v in [
-        ("Source IP",      r["source_ip"]),
-        ("Destination IP", r["dest_ip"]),
-        ("Hostname",       r["hostname"]),
-        ("Username",       r["username"]),
-        ("Process",        r["process"]),
-        ("Domain",         r["domain"]),
-        ("URL",            r["url"]),
-        ("File Hash",      r["file_hash"]),
-        ("Filename",       r["filename"]),
-    ]:
-        pdf.kv(k, v)
-    pdf.ln(3)
+    section("3. MITRE ATT&CK Mapping")
+    kv("Technique ID", report_data["mitre_technique"])
+    kv("Technique Name", report_data["mitre_technique_name"])
+    kv("Tactic", report_data["mitre_tactic"])
 
-    # 6. Business Impact
-    pdf.section_title("6. Business Impact")
-    pdf.kv("Impact Level", r["impact"])
-    impact_map = {
-        "Very High": (
-            "Critical threat to business operations. Potential for data breach, "
-            "system compromise, or financial loss. Immediate executive escalation required."
-        ),
-        "High": (
-            "Significant security risk requiring priority investigation and containment. "
-            "Potential for unauthorized access to sensitive data or systems."
-        ),
-        "Moderate": (
-            "Suspicious activity with potential business impact if unaddressed. "
-            "Investigation required to determine actual impact."
-        ),
-        "Low": (
-            "Low-confidence or low-impact activity. "
-            "Monitor and investigate when capacity allows."
-        ),
-    }
-    desc = impact_map.get(r["impact"], "Impact assessed based on available telemetry.")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(avail, 6, _safe(desc))
-    pdf.ln(3)
+    section("4. Detection Evidence")
+    kv("Detection Reason", report_data["detection_reason"])
+    kv("HTTP Method/Status", f"{report_data['http_method']} / {report_data['http_status']}")
+    kv("URI Path", report_data["uri_path"])
 
-    # 7. SOC Recommendations
-    pdf.section_title("7. SOC Analyst Recommendations")
-    for section_label, steps in [
-        ("Investigation Steps", recs["investigation"]),
-        ("Containment Actions", recs["containment"]),
-        ("Remediation Steps",   recs["remediation"]),
-    ]:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(79, 100, 40)
-        pdf.cell(avail, 6, section_label + ":", ln=True)
-        pdf.set_text_color(0, 0, 0)
-        for step in steps:
-            pdf.bullet(step)
-        pdf.ln(2)
+    section("5. Indicators of Compromise (IOC)")
+    kv("Source IP", report_data["source_ip"])
+    kv("Hostname", report_data["hostname"])
+    kv("Username", report_data["username"])
+    kv("URL", report_data["url"])
 
-    # 8. AI SOC Analysis
-    if ai_summary and ai_summary.strip():
-        pdf.section_title("8. SOC AI Analysis")
-        pdf.set_font("Helvetica", "I", 8)
-        pdf.set_text_color(100, 80, 40)
-        pdf.cell(avail, 5, "Note: AI-generated content. Verify before acting.", ln=True)
-        pdf.set_text_color(0, 0, 0)
-        pdf.set_font("Helvetica", "", 9)
-        pdf.multi_cell(avail, 6, _safe(ai_summary, max_len=2000))
-        pdf.ln(3)
+    section("6. Business Impact")
+    kv("Impact Level", report_data["business_impact"])
+    kv("Priority", report_data["investigation_priority"])
 
-    # 9. Final Verdict
-    pdf.section_title("9. Final Verdict")
-    for k, v in [
-        ("Detection Result", r["detection"]),
-        ("Severity",         r["severity"]),
-        ("Risk Score",       f"{r['risk_score']} / 10"),
-        ("Analyst Action",   "Investigate per priority and SOC playbook"),
-        ("Report Time",      now),
-    ]:
-        pdf.kv(k, v)
-    pdf.ln(3)
+    section("7. SOC Analyst Recommendations")
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, _sanitize("Investigation Steps:"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    for step in report_data["investigation_steps"]:
+        pdf.multi_cell(0, 6, _sanitize(f"- {step}"))
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, _sanitize("Containment Actions:"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    for step in report_data["containment_actions"]:
+        pdf.multi_cell(0, 6, _sanitize(f"- {step}"))
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, _sanitize("Remediation Steps:"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    for step in report_data["remediation_steps"]:
+        pdf.multi_cell(0, 6, _sanitize(f"- {step}"))
 
+    section("8. SOC AI Analysis")
     pdf.set_font("Helvetica", "I", 8)
-    pdf.set_text_color(120, 90, 60)
-    pdf.multi_cell(avail, 5,
-        "This report was generated by SOC L2 Agent. All findings are based on "
-        "available telemetry only. Do not take action solely on AI-generated content "
-        "without analyst verification."
-    )
+    pdf.multi_cell(0, 5, _sanitize("Note: AI-generated content. Verify before acting."))
+    pdf.set_font("Helvetica", "", 9)
+    pdf.multi_cell(0, 5, _sanitize(report_data["ai_summary"][:3000]))
+
+    section("9. Final Verdict")
+    kv("Detection Result", report_data["final_detection"])
+    kv("Severity", report_data["severity"])
+
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.ln(4)
+    pdf.multi_cell(0, 4, _sanitize(
+        "This report was generated by SOC L2 Agent. All findings are based on available "
+        "telemetry only. Do not take action solely on AI-generated content without analyst verification."
+    ))
 
     return bytes(pdf.output())
