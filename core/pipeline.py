@@ -41,7 +41,21 @@ def load_pipeline():
     df = AlertTriangle().generate(df)
 
     if "id" not in df.columns:
-        df = df.reset_index().rename(columns={"index": "id"})
-    df["id"] = df["id"].astype(str)
+        # IMPORTANT: do NOT use reset_index().rename(columns={"index": "id"})
+        # here. Real Splunk exports include a field literally called
+        # "index" (Splunk's default index is named "main"), so that
+        # rename would silently overwrite the wrong column and give
+        # almost every row the same id ("main") -> duplicate widget
+        # keys and a StreamlitDuplicateElementKey crash on the
+        # dashboard. Building "id" directly from a clean positional
+        # index avoids the collision entirely.
+        df = df.reset_index(drop=True)
+        df["id"] = df.index.astype(str)
+    else:
+        df["id"] = df["id"].astype(str)
+        if df["id"].duplicated().any():
+            # Source "id" field exists but isn't actually unique —
+            # make it unique rather than let the UI crash on it.
+            df["id"] = df.reset_index(drop=True).index.astype(str)
 
     return df

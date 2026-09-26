@@ -43,13 +43,21 @@ def _get_investigator():
     return LLMService(os.getenv("GROQ_API_KEY", ""))
 
 
+def _is_real(value):
+    """Treat missing/placeholder-looking values as absent, not just falsy ones."""
+    if value is None:
+        return False
+    s = str(value).strip().lower()
+    return s not in ("", "none", "nan", "null")
+
+
 def field(label, value):
-    val_html = f'<div class="field-val">{value}</div>' if value else f'<div class="field-val field-na">{NA_TEXT}</div>'
+    val_html = f'<div class="field-val">{value}</div>' if _is_real(value) else f'<div class="field-val field-na">{NA_TEXT}</div>'
     return f'<div class="field-box"><div class="field-label">{label}</div>{val_html}</div>'
 
 
 def ioc_card(label, value):
-    val_html = f'<div class="ioc-val">{value}</div>' if value else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
+    val_html = f'<div class="ioc-val">{value}</div>' if _is_real(value) else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
     return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
 
 

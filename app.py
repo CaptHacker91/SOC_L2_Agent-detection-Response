@@ -73,7 +73,13 @@ def render_kpis(df):
             st.markdown(f'<div class="kpi-card"><h2>{value}</h2><p>{label}</p></div>', unsafe_allow_html=True)
 
 
-def render_alert_card(row):
+def render_alert_card(row, position):
+    """
+    position: the row's position within THIS render pass (from
+    enumerate() in the caller). Used as part of the widget key so it
+    is guaranteed unique even if two rows somehow share the same
+    'id' value — never rely on data content alone for a Streamlit key.
+    """
     sev = row.get("severity", "Low")
     with st.container():
         st.markdown(
@@ -87,8 +93,8 @@ def render_alert_card(row):
         )
         c1, c2 = st.columns([1, 5])
         with c1:
-            if st.button("Investigate", key=f"inv_{row.get('id', row.name)}"):
-                st.session_state["selected_alert_id"] = str(row.get("id", row.name))
+            if st.button("Investigate", key=f"inv_{position}_{row.get('id')}"):
+                st.session_state["selected_alert_id"] = str(row.get("id"))
                 st.switch_page("pages/Investigation.py")
 
 
@@ -128,8 +134,8 @@ def main():
             view = view[view["severity"] == sev_filter]
 
         st.caption(f"Showing {len(view)} of {len(alerts_df)} security alerts ({total_events_note(df)}).")
-        for _, row in view.iterrows():
-            render_alert_card(row)
+        for position, (_, row) in enumerate(view.iterrows()):
+            render_alert_card(row, position)
 
     with tab_all:
         st.caption(f"Full source dataset — {len(df)} total events, including Normal telemetry.")

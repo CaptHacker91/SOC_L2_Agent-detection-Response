@@ -24,8 +24,9 @@ class AlertTriangle:
 
             if detection == "Normal":
                 final.append("Normal")
-                priority.append("None")
-                impact.append("None")
+                # Not the string "None" — that reads as a real value in the UI.
+                priority.append("Not Applicable (Normal Event)")
+                impact.append("Not Applicable (Normal Event)")
                 continue
 
             if severity == "Critical":
