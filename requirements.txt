@@ -7,5 +7,4 @@ requests
 plotly
 streamlit
 fpdf2
-
-
+requests

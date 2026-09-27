@@ -1,0 +1,30 @@
+# Self-hosted n8n — Community Edition. 100% free, unlimited executions/
+# workflows, all nodes/integrations. This is NOT n8n Cloud (which has
+# execution limits + paid plans) — this runs on your own machine/VPS.
+#
+# Start:   cd n8n && docker compose up -d
+# Open:    http://localhost:5678
+# Stop:    docker compose down          (data survives, kept in the named volume)
+# Logs:    docker compose logs -f
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/          # replace with your public HTTPS URL once you have one (see fix.md)
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=change-me-before-first-run
+      - N8N_SECURE_COOKIE=false                      # only needed for plain-http localhost; remove once you're on HTTPS
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:

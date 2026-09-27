@@ -19,7 +19,7 @@ class ChatbotService:
     MODEL_CHAIN = [
         os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
         "openai/gpt-oss-20b",
-        "qwen/qwen3.6-27b",
+        "qwen/qwen3-32b",
     ]
 
     def __init__(self, api_key: str):
