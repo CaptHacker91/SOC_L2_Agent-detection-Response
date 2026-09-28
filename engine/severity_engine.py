@@ -5,6 +5,11 @@ class SeverityEngine:
     generic "unknown -> 6.5 -> Medium" fallback, which was the root
     cause of every event landing on Medium regardless of evidence.
 
+    Wazuh alerts are scored from the rule level Wazuh itself assigned
+    (0-15), scaled linearly to 0-10: level 14-15 -> Critical, 11-13 ->
+    High, 6-10 -> Medium, 0-5 -> Low. Nothing is invented - the score is
+    exactly the source's own severity, stated in the justification.
+
     Bands:
         0.0-3.9  = Low
         4.0-6.9  = Medium
@@ -42,6 +47,8 @@ class SeverityEngine:
         for _, row in df.iterrows():
             if row.get("final_detection") == "Normal":
                 score, why = self.NORMAL_RISK
+            elif row.get("event_category") == "wazuh":
+                score, why = self._wazuh_score(row)
             else:
                 score, why = self.RISK_SCORES.get(row.get("threat"), self.DEFAULT_RISK)
 
@@ -53,6 +60,16 @@ class SeverityEngine:
         df["risk_justification"] = reasons
         df["severity"] = severities
         return df
+
+    def _wazuh_score(self, row):
+        try:
+            level = int(row.get("rule_level"))
+        except (TypeError, ValueError):
+            return (self.DEFAULT_RISK[0],
+                    "Wazuh did not supply a rule level for this alert; defaulting to Low.")
+        level = max(0, min(level, 15))
+        return (round(level / 15 * 10, 1),
+                f"Wazuh rule level {level}/15 (severity assigned by the Wazuh rule), scaled to a 0-10 risk score.")
 
     @staticmethod
     def _band(score, final_detection):

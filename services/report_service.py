@@ -2,6 +2,8 @@ import re
 from datetime import datetime, timezone
 from fpdf import FPDF
 
+from services.incident_context import is_present
+
 # fpdf2 wraps text by breaking at spaces only. Real web-log fields (URL,
 # URI, referer, query strings, JSESSIONIDs...) are long single tokens with
 # NO spaces — e.g. "/cart.do?action=changequantity&itemId=EST-26&productId=
@@ -9,8 +11,8 @@ from fpdf import FPDF
 # token like that is wider than the remaining line width, fpdf2's word-wrap
 # algorithm has nowhere to break and raises
 # "FPDFException: Not enough horizontal space to render a single character."
-# Root cause confirmed against this project's own dataset — data/splunk_export.json
-# has uri/uri_query/referer fields up to ~111 chars with zero spaces. Fix:
+# Root cause confirmed against real web-log data: uri/uri_query/referer fields
+# up to ~111 chars with zero spaces (long URLs also appear in SIEM alerts). Fix:
 # insert a real space every 40 chars inside any unbroken run of 40+
 # non-space characters BEFORE handing text to fpdf2, so it always has a
 # break point. This changes only how long tokens wrap on the PDF page —
@@ -71,6 +73,46 @@ _RECOMMENDATIONS = {
     },
 }
 
+_RECOMMENDATIONS.update({
+    "Persistence": {
+        "investigation": ["Review startup items, scheduled tasks/cron and services changed on the host",
+                           "Identify which account and process made the change"],
+        "containment": ["Disable or remove the persistence mechanism after capturing evidence",
+                         "Isolate the host if unauthorized changes are confirmed"],
+        "remediation": ["Restore the affected configuration from a known-good baseline",
+                         "Alert on future changes to the same locations"],
+    },
+    "Privilege Escalation": {
+        "investigation": ["Review who ran the elevated command and from where",
+                           "Check for changes to group membership or sudo/admin rights"],
+        "containment": ["Revoke the elevated privileges or session",
+                         "Reset credentials of the account involved"],
+        "remediation": ["Apply least-privilege to the affected account",
+                         "Patch any local privilege-escalation vulnerability involved"],
+    },
+    "Defense Evasion": {
+        "investigation": ["Check whether logging/security tooling was disabled or tampered with",
+                           "Review activity on the host around the same time"],
+        "containment": ["Re-enable security controls and isolate the host if tampering is confirmed"],
+        "remediation": ["Protect security tooling against tampering",
+                         "Forward logs off-host so they cannot be cleared locally"],
+    },
+    "Lateral Movement": {
+        "investigation": ["Trace the source host and account used for the remote access",
+                           "Look for the same account/IP on other hosts"],
+        "containment": ["Disable the account and block the source IP/host",
+                         "Isolate the systems involved"],
+        "remediation": ["Restrict remote-access protocols between network segments",
+                         "Rotate credentials that may have been exposed"],
+    },
+    "Discovery": {
+        "investigation": ["Identify what was enumerated and by which account/process",
+                           "Check for follow-on activity from the same source"],
+        "containment": ["Monitor or block the source if activity continues"],
+        "remediation": ["Reduce information exposed to unprivileged accounts"],
+    },
+})
+
 _GENERIC_RECOMMENDATIONS = {
     "investigation": ["Review all available logs related to this event",
                        "Correlate with other events from the same source IP/host"],
@@ -82,32 +124,54 @@ _GENERIC_RECOMMENDATIONS = {
 
 
 def get_recommendations(mitre_tactic, severity):
-    return _RECOMMENDATIONS.get(mitre_tactic, _GENERIC_RECOMMENDATIONS)
+    # A SIEM may supply several tactics ("Credential Access, Initial Access");
+    # use the first one we have guidance for.
+    for tactic in str(mitre_tactic or "").split(","):
+        if tactic.strip() in _RECOMMENDATIONS:
+            return _RECOMMENDATIONS[tactic.strip()]
+    return _GENERIC_RECOMMENDATIONS
+
+
+def _v(alert: dict, key: str):
+    """Value if genuinely present (not None/NaN/placeholder), else NA_TEXT."""
+    value = alert.get(key)
+    return value if is_present(value) else NA_TEXT
 
 
 def build_report_data(alert: dict, ai_summary: str = "") -> dict:
-    """Single source of truth for what goes in the PDF — same object shape used by the UI."""
+    """Single source of truth for what goes in the PDF - same object shape used by the UI."""
     rec = get_recommendations(alert.get("mitre_tactic"), alert.get("severity"))
     return {
         "incident_id": alert.get("id"),
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "threat": alert.get("threat") or NA_TEXT,
-        "severity": alert.get("severity") or NA_TEXT,
-        "risk_score": alert.get("risk_score"),
-        "final_detection": alert.get("final_detection") or NA_TEXT,
-        "detection_reason": alert.get("detection_reason") or NA_TEXT,
-        "mitre_technique": alert.get("mapped_technique") or NA_TEXT,
-        "mitre_technique_name": alert.get("mitre_technique_name") or NA_TEXT,
-        "mitre_tactic": alert.get("mitre_tactic") or NA_TEXT,
-        "source_ip": alert.get("source_ip") or NA_TEXT,
-        "hostname": alert.get("hostname") or NA_TEXT,
-        "username": alert.get("username") or NA_TEXT,
-        "url": alert.get("url") or NA_TEXT,
-        "uri_path": alert.get("uri_path") or NA_TEXT,
-        "http_method": alert.get("http_method") or NA_TEXT,
-        "http_status": alert.get("http_status") if alert.get("http_status") is not None else NA_TEXT,
-        "business_impact": alert.get("business_impact") or NA_TEXT,
-        "investigation_priority": alert.get("investigation_priority") or NA_TEXT,
+        "event_time": _v(alert, "event_time"),
+        "source_system": _v(alert, "source"),
+        "threat": _v(alert, "threat"),
+        "severity": _v(alert, "severity"),
+        "risk_score": alert.get("risk_score") if is_present(alert.get("risk_score")) else NA_TEXT,
+        "final_detection": _v(alert, "final_detection"),
+        "detection_reason": _v(alert, "detection_reason"),
+        "rule_id": _v(alert, "rule_id"),
+        "rule_level": _v(alert, "rule_level"),
+        "rule_groups": _v(alert, "rule_groups"),
+        "mitre_technique": _v(alert, "mapped_technique"),
+        "mitre_technique_name": _v(alert, "mitre_technique_name"),
+        "mitre_tactic": _v(alert, "mitre_tactic"),
+        "source_ip": _v(alert, "source_ip"),
+        "dst_ip": _v(alert, "dst_ip"),
+        "hostname": _v(alert, "hostname"),
+        "username": _v(alert, "username"),
+        "process": _v(alert, "process"),
+        "command_line": _v(alert, "command_line"),
+        "file_hash": _v(alert, "file_hash"),
+        "filename": _v(alert, "filename"),
+        "domain": _v(alert, "domain"),
+        "url": _v(alert, "url"),
+        "uri_path": _v(alert, "uri_path"),
+        "http_method": _v(alert, "http_method"),
+        "http_status": _v(alert, "http_status"),
+        "business_impact": _v(alert, "business_impact"),
+        "investigation_priority": _v(alert, "investigation_priority"),
         "investigation_steps": rec["investigation"],
         "containment_actions": rec["containment"],
         "remediation_steps": rec["remediation"],
@@ -153,6 +217,7 @@ def generate_pdf(report_data: dict) -> bytes:
     pdf.multi_cell(0, 6, _sanitize(
         f"A {report_data['severity']}-severity security event '{report_data['threat']}' was detected. "
         f"Detection result: '{report_data['final_detection']}'. Risk score: {report_data['risk_score']}/10. "
+        f"SIEM rule {report_data['rule_id']} (level {report_data['rule_level']}). "
         f"MITRE technique {report_data['mitre_technique']} ({report_data['mitre_technique_name']}) under "
         f"{report_data['mitre_tactic']} tactic. Business impact: {report_data['business_impact']}. "
         f"Priority: {report_data['investigation_priority']}."
@@ -161,6 +226,9 @@ def generate_pdf(report_data: dict) -> bytes:
     section("2. Incident Metadata")
     kv("Incident ID", report_data["incident_id"])
     kv("Generated", report_data["generated_at"])
+    kv("Event Time", report_data["event_time"])
+    kv("Source System", report_data["source_system"])
+    kv("Host", report_data["hostname"])
 
     section("3. MITRE ATT&CK Mapping")
     kv("Technique ID", report_data["mitre_technique"])
@@ -169,14 +237,22 @@ def generate_pdf(report_data: dict) -> bytes:
 
     section("4. Detection Evidence")
     kv("Detection Reason", report_data["detection_reason"])
+    kv("SIEM Rule ID / Level", f"{report_data['rule_id']} / {report_data['rule_level']}")
+    kv("Rule Groups", report_data["rule_groups"])
+    kv("Command Line", report_data["command_line"])
     kv("HTTP Method/Status", f"{report_data['http_method']} / {report_data['http_status']}")
     kv("URI Path", report_data["uri_path"])
 
     section("5. Indicators of Compromise (IOC)")
     kv("Source IP", report_data["source_ip"])
+    kv("Destination IP", report_data["dst_ip"])
     kv("Hostname", report_data["hostname"])
     kv("Username", report_data["username"])
+    kv("Process", report_data["process"])
+    kv("Domain", report_data["domain"])
     kv("URL", report_data["url"])
+    kv("Filename", report_data["filename"])
+    kv("File Hash", report_data["file_hash"])
 
     section("6. Business Impact")
     kv("Impact Level", report_data["business_impact"])
@@ -203,7 +279,7 @@ def generate_pdf(report_data: dict) -> bytes:
     pdf.set_font("Helvetica", "I", 8)
     pdf.multi_cell(0, 5, _sanitize("Note: AI-generated content. Verify before acting."))
     pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(0, 5, _sanitize(report_data["ai_summary"][:3000]))
+    pdf.multi_cell(0, 5, _sanitize(report_data["ai_summary"][:8000]))
 
     section("9. Final Verdict")
     kv("Detection Result", report_data["final_detection"])

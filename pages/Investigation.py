@@ -1,9 +1,12 @@
+import html
+import json
 import os
 import streamlit as st
 from dotenv import load_dotenv
 
 from core.pipeline import load_pipeline
 from services.chatbot_service import ChatbotService
+from services.incident_context import find_related_events
 from services.llm_service import LLMService
 from services.report_service import generate_pdf, get_recommendations, build_report_data
 
@@ -51,13 +54,18 @@ def _is_real(value):
     return s not in ("", "none", "nan", "null")
 
 
+def esc(value):
+    """HTML-escape telemetry before it goes into unsafe_allow_html markup (log data is attacker-controlled)."""
+    return html.escape(str(value))
+
+
 def field(label, value):
-    val_html = f'<div class="field-val">{value}</div>' if _is_real(value) else f'<div class="field-val field-na">{NA_TEXT}</div>'
+    val_html = f'<div class="field-val">{esc(value)}</div>' if _is_real(value) else f'<div class="field-val field-na">{NA_TEXT}</div>'
     return f'<div class="field-box"><div class="field-label">{label}</div>{val_html}</div>'
 
 
 def ioc_card(label, value):
-    val_html = f'<div class="ioc-val">{value}</div>' if _is_real(value) else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
+    val_html = f'<div class="ioc-val">{esc(value)}</div>' if _is_real(value) else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
     return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
 
 
@@ -77,6 +85,7 @@ def main():
         st.error(f"Alert {inc_id} not found in the current dataset.")
         return
     a = match.iloc[0].to_dict()
+    related = find_related_events(df, a)
 
     # ── 1. Incident Header ───────────────────────────────────────────────────
     st.markdown(f"## 🔎 Incident {inc_id}")
@@ -105,6 +114,10 @@ def main():
 
     # ── 3. Detection Evidence & Logs ─────────────────────────────────────────
     st.markdown('<div class="sec-heading">📄 Detection Evidence & Logs</div>', unsafe_allow_html=True)
+    w = st.columns(3)
+    w[0].markdown(field("SIEM RULE ID", a.get("rule_id")), unsafe_allow_html=True)
+    w[1].markdown(field("SIEM RULE LEVEL (0-15)", a.get("rule_level")), unsafe_allow_html=True)
+    w[2].markdown(field("RULE GROUPS", a.get("rule_groups")), unsafe_allow_html=True)
     e = st.columns(3)
     e[0].markdown(field("EVENT TIME", a.get("event_time")), unsafe_allow_html=True)
     e[1].markdown(field("HTTP METHOD", a.get("http_method")), unsafe_allow_html=True)
@@ -114,27 +127,41 @@ def main():
     e2[1].markdown(field("URI QUERY", a.get("uri_query")), unsafe_allow_html=True)
     e2[2].markdown(field("REFERER", a.get("referer")), unsafe_allow_html=True)
 
+    raw_preview = a.get("original_log") if _is_real(a.get("original_log")) else a.get("raw_event")
+    if isinstance(raw_preview, (dict, list)):
+        raw_preview = json.dumps(raw_preview, default=str, ensure_ascii=False)
+    raw_preview = (str(raw_preview)[:300] + "…") if _is_real(raw_preview) else NA_TEXT
+
     st.markdown(f"""<div class="findings-box">
-Threat          : {a.get('threat')}
-Rule Type       : {a.get('rule_type')}
-Tool            : {a.get('tool')}
-Detection       : {a.get('final_detection')}
-Detection Reason: {a.get('detection_reason')}
-URI             : {a.get('url') or NA_TEXT}
-Raw Event       : {(str(a.get('raw_event'))[:200] + '…') if a.get('raw_event') else NA_TEXT}
+Threat          : {esc(a.get('threat'))}
+Rule Type       : {esc(a.get('rule_type'))}
+Tool            : {esc(a.get('tool'))}
+Detection       : {esc(a.get('final_detection'))}
+Detection Reason: {esc(a.get('detection_reason'))}
+Risk Reasoning  : {esc(a.get('risk_justification'))}
+Command Line    : {esc(a.get('command_line')) if _is_real(a.get('command_line')) else NA_TEXT}
+URI             : {esc(a.get('url')) if _is_real(a.get('url')) else NA_TEXT}
+Raw Event       : {esc(raw_preview)}
 </div>""", unsafe_allow_html=True)
+
+    with st.expander(f"🔗 Related events ({len(related)}) — same source IP, or same host + rule"):
+        if related:
+            for r in related:
+                st.text(f"[{r['id']}] {r['line']}")
+        else:
+            st.caption("No related events among the currently loaded alerts.")
 
     # ── 4. IOC Section ────────────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
     st.markdown(f"""<div class="ioc-grid">
       {ioc_card("Source IP",      a.get("source_ip"))}
-      {ioc_card("Destination IP", None)}
+      {ioc_card("Destination IP", a.get("dst_ip"))}
       {ioc_card("Hostname",       a.get("hostname"))}
       {ioc_card("Username",       a.get("username"))}
-      {ioc_card("Process",        None)}
+      {ioc_card("Process",        a.get("process"))}
       {ioc_card("Domain",         a.get("domain"))}
       {ioc_card("URL",            a.get("url"))}
-      {ioc_card("File Hash",      None)}
+      {ioc_card("File Hash",      a.get("file_hash"))}
       {ioc_card("Filename",       a.get("filename"))}
     </div>""", unsafe_allow_html=True)
     st.caption("Fields shown as unavailable genuinely are not present in this event's telemetry — nothing here is fabricated.")
@@ -166,14 +193,14 @@ Raw Event       : {(str(a.get('raw_event'))[:200] + '…') if a.get('raw_event')
         if st.button("🧠 Generate AI Investigation Report"):
             with st.spinner("Generating executive summary, root cause & recommendations…"):
                 try:
-                    st.session_state[report_key] = _get_investigator().investigate(a)
+                    st.session_state[report_key] = _get_investigator().investigate(a, related)
                 except Exception as ex:
                     st.session_state[report_key] = f"Error generating report: {ex}"
             st.rerun()
     else:
         st.markdown(
             f'<div class="findings-box" style="white-space:pre-wrap;line-height:1.7;font-size:13px">'
-            f'{st.session_state[report_key]}</div>',
+            f'{esc(st.session_state[report_key])}</div>',
             unsafe_allow_html=True,
         )
         if st.button("🔄 Regenerate Report"):
@@ -209,7 +236,7 @@ Raw Event       : {(str(a.get('raw_event'))[:200] + '…') if a.get('raw_event')
 
     # ── 8. SOC AI Chatbot ─────────────────────────────────────────────────────
     st.markdown('<div class="sec-heading">💬 SOC AI Chat Assistant</div>', unsafe_allow_html=True)
-    st.caption("Incident-aware — answers are grounded in THIS alert's telemetry only.")
+    st.caption("Incident-aware — answers are grounded in THIS alert's telemetry (rule, event, MITRE, IOC, related events) only.")
 
     if chat_key not in st.session_state:
         st.session_state[chat_key] = []
@@ -225,7 +252,7 @@ Raw Event       : {(str(a.get('raw_event'))[:200] + '…') if a.get('raw_event')
             st.markdown(question)
         with st.chat_message("assistant"):
             with st.spinner("Thinking…"):
-                answer = _get_chatbot().ask(question, a, st.session_state[chat_key])
+                answer = _get_chatbot().ask(question, a, st.session_state[chat_key], related)
             st.markdown(answer)
         st.session_state[chat_key].append({"role": "assistant", "content": answer})
 

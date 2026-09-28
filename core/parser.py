@@ -6,9 +6,10 @@ class DetectionParser:
     rows and adds one new field, event_category, so downstream stages
     (normalizer, detection engine) can branch cleanly between:
 
-      - "vendor_sales"   business telemetry (tutorialdata vendor_sales.log)
+      - "wazuh"          normalized events from services/wazuh_service.py
+      - "vendor_sales"   business telemetry (vendor_sales.log)
       - "web_access"     access_combined_wcookie web logs
-      - "synthetic_soc"  the original BLUE_TEAM_DEFENSE_DATASET rows
+      - "synthetic_soc"  rows carrying a threat label + signature
       - "other"          anything that doesn't match a known shape
     """
 
@@ -23,6 +24,9 @@ class DetectionParser:
         return parsed
 
     def _categorize(self, rec):
+        if rec.get("source") == "wazuh":
+            return "wazuh"
+
         sourcetype = str(rec.get("sourcetype", "")).lower()
         host = str(rec.get("host", "")).lower()
 

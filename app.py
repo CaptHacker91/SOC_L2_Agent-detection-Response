@@ -1,21 +1,25 @@
 """
 SOC L2 Agent — Dashboard.
 
-Pipeline: DataSource -> Parser -> Normalizer -> DetectionEngine ->
-MitreMapper -> SeverityEngine -> AlertTriangle.
+Pipeline: Wazuh (Indexer alerts) -> WazuhService (normalized events) ->
+Parser -> Normalizer -> DetectionEngine -> MitreMapper -> SeverityEngine ->
+AlertTriangle.
 
-IMPORTANT: load_pipeline() intentionally has NO Streamlit caching
-decorator. During active development this was the #1 cause of
-"I fixed the code but the dashboard still shows the old broken
-numbers" — Streamlit was serving a cached DataFrame from before the
-fix. Once the app is feature-stable, re-add
-@st.cache_data(ttl=300) if load time becomes a real problem.
+Alerts are fetched from Wazuh on first load and whenever "Fetch Latest
+Alerts" is clicked in the sidebar; the analysed result is kept in
+st.session_state (see core/pipeline.py). If Wazuh is unreachable the
+dashboard still renders, with a clear "Wazuh Connection Failed" message.
 """
+
+import html
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from core.pipeline import load_pipeline
+from core.pipeline import (
+    DEFAULT_LIMIT, DEFAULT_LOOKBACK, LOOKBACK_OPTIONS,
+    get_wazuh_status, load_pipeline, refresh_alerts, run_connection_test,
+)
 
 load_dotenv(override=True)
 
@@ -53,6 +57,38 @@ def render_header():
     )
 
 
+def esc(value):
+    """HTML-escape telemetry before it goes into unsafe_allow_html markup (log data is attacker-controlled)."""
+    return "" if value is None else html.escape(str(value))
+
+
+def render_wazuh_sidebar():
+    status = get_wazuh_status() or {}
+    with st.sidebar:
+        st.markdown("### 🔌 Wazuh SIEM")
+
+        if status.get("connected"):
+            st.success("✅ Wazuh Connected")
+            note = f"Server API {status['api_version']} · " if status.get("api_version") else ""
+            if status.get("count") is not None:
+                note += f"{status['count']} alerts fetched (last {status.get('lookback')}) · "
+            st.caption(note + f"checked {status.get('checked_at', '')}")
+        elif status:
+            st.error("❌ Wazuh Connection Failed")
+
+        if status.get("error"):
+            st.caption(f"⚠️ {status['error']}")
+        if status.get("kept_previous"):
+            st.caption("Showing the last successfully fetched alerts.")
+
+        st.number_input("Alerts to fetch", min_value=10, max_value=1000, value=DEFAULT_LIMIT,
+                        step=10, key="wazuh_limit")
+        st.selectbox("Lookback window", LOOKBACK_OPTIONS,
+                     index=LOOKBACK_OPTIONS.index(DEFAULT_LOOKBACK), key="wazuh_lookback")
+        st.button("🔄 Fetch Latest Alerts", on_click=refresh_alerts, use_container_width=True)
+        st.button("Test Connection", on_click=run_connection_test, use_container_width=True)
+
+
 def render_kpis(df):
     total = len(df)
     alerts_df = df[df["final_detection"] != "Normal"]
@@ -84,10 +120,10 @@ def render_alert_card(row, position):
     with st.container():
         st.markdown(
             f"""<div class="alert-card">
-                <span class="badge sev-{sev}">{sev}</span>
-                &nbsp;<b>{row.get('threat')}</b>
-                &nbsp;<span style="color:#888;font-size:12px">{row.get('event_time', '')}</span>
-                <div style="font-size:13px;color:#555;margin-top:6px">{row.get('detection_reason', '')}</div>
+                <span class="badge sev-{esc(sev)}">{esc(sev)}</span>
+                &nbsp;<b>{esc(row.get('threat'))}</b>
+                &nbsp;<span style="color:#888;font-size:12px">{esc(row.get('event_time'))}</span>
+                <div style="font-size:13px;color:#555;margin-top:6px">{esc(row.get('detection_reason'))}</div>
                 </div>""",
             unsafe_allow_html=True,
         )
@@ -101,9 +137,16 @@ def render_alert_card(row, position):
 def main():
     render_header()
     df = load_pipeline()
+    render_wazuh_sidebar()
 
     if df.empty:
-        st.error("No records loaded. Check DATA_SOURCE / MOCK_DATA_PATH in your .env.")
+        status = get_wazuh_status() or {}
+        if status.get("connected") and not status.get("error"):
+            st.info(f"Wazuh is connected but returned no alerts for the last {status.get('lookback')}. "
+                    "Try a longer lookback window in the sidebar, then click Fetch Latest Alerts.")
+        else:
+            st.error("No alerts loaded — Wazuh connection failed. See the sidebar for details and "
+                     "check the WAZUH_* settings in your .env file.")
         return
 
     render_kpis(df)
@@ -115,7 +158,7 @@ def main():
 
         c1, c2 = st.columns([3, 1])
         with c1:
-            search = st.text_input("🔍 Search threat, IP, host, URI…", "")
+            search = st.text_input("🔍 Search threat, IP, host, rule ID, URI…", "")
         with c2:
             sev_filter = st.selectbox("Severity", ["All", "Critical", "High", "Medium", "Low"])
 
@@ -126,7 +169,8 @@ def main():
                 lambda r: s in str(r.get("threat", "")).lower()
                 or s in str(r.get("source_ip", "")).lower()
                 or s in str(r.get("hostname", "")).lower()
-                or s in str(r.get("url", "")).lower(),
+                or s in str(r.get("url", "")).lower()
+                or s in str(r.get("rule_id", "")).lower(),
                 axis=1,
             )
             view = view[mask]
@@ -140,9 +184,9 @@ def main():
     with tab_all:
         st.caption(f"Full source dataset — {len(df)} total events, including Normal telemetry.")
         display_cols = [c for c in [
-            "id", "event_time", "sourcetype", "hostname", "source_ip", "username",
-            "http_method", "http_status", "uri_path", "url", "threat", "severity",
-            "risk_score", "final_detection",
+            "id", "event_time", "hostname", "source_ip", "username", "rule_id", "rule_level",
+            "http_method", "http_status", "uri_path", "url", "threat", "mapped_technique",
+            "severity", "risk_score", "final_detection",
         ] if c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True, height=500)
 

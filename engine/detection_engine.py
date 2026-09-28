@@ -11,6 +11,13 @@ class DetectionEngine:
     once severity is known.
 
     Branches by event_category (set by core/parser.py):
+      - wazuh          -> a Wazuh alert IS already a rule match, so the
+                          rule that fired becomes the threat label and the
+                          reason cites its id/level/groups. Informational
+                          alerts (rule level <= 3 with no MITRE mapping
+                          supplied by Wazuh) are Normal; everything else
+                          is an Anomaly for SeverityEngine/AlertTriangle to
+                          grade.
       - vendor_sales   -> ALWAYS Normal. Business telemetry must never
                           be auto-flagged as malicious.
       - web_access     -> HTTP status + URI pattern rules, each with
@@ -18,14 +25,14 @@ class DetectionEngine:
                           is never described as a confirmed attack —
                           only as what it actually is.
       - synthetic_soc  -> rules/detection_rules.json signature match,
-                          else flagged as an unmatched anomaly. This
-                          keeps BLUE_TEAM_DEFENSE_DATASET.jsonl working
-                          exactly as before, without depending on
-                          IsolationForest/LocalOutlierFactor, which
-                          was the actual source of instability when
-                          real Splunk data was run through the old code.
+                          else flagged as an unmatched anomaly. Purely
+                          rule/signature based - no statistical models.
       - other          -> Normal, generic label. Never guessed at.
     """
+
+    # Wazuh rule levels at or below this are informational (e.g. "login
+    # session opened") unless Wazuh itself attached a MITRE technique.
+    WAZUH_INFORMATIONAL_MAX_LEVEL = 3
 
     SUSPICIOUS_URI_PATTERNS = [
         "..", "/etc/passwd", "select ", "union select", "<script",
@@ -70,6 +77,9 @@ class DetectionEngine:
     def _classify_row(self, row):
         category = row.get("event_category", "other")
 
+        if category == "wazuh":
+            return self._classify_wazuh(row)
+
         if category == "vendor_sales":
             return ("Vendor Sales Record", "Business telemetry; not a security event.",
                     "Business Rule", "Vendor Feed", "Normal")
@@ -81,6 +91,32 @@ class DetectionEngine:
             return self._classify_synthetic(row)
 
         return ("Unclassified Event", "Event does not match a known category.", "None", "None", "Normal")
+
+    def _classify_wazuh(self, row):
+        level = self._to_int(row.get("rule_level"))
+        rule_id = row.get("rule_id")
+        description = str(row.get("description") or "").strip() or "Wazuh alert (no rule description supplied)"
+        groups = row.get("rule_groups")
+        has_mitre = bool(row.get("mitre_technique"))
+
+        reason = f"Wazuh rule {rule_id if rule_id else '(id not supplied)'}"
+        reason += f" (level {level}/15)" if level is not None else " (level not supplied)"
+        reason += f" fired: {description}"
+        if groups:
+            reason += f" [groups: {groups}]"
+
+        informational = (level is not None
+                         and level <= self.WAZUH_INFORMATIONAL_MAX_LEVEL
+                         and not has_mitre)
+        final = "Normal" if informational else "Anomaly"
+        return (description, reason, "Wazuh Rule", "Wazuh", final)
+
+    @staticmethod
+    def _to_int(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _classify_synthetic(self, row):
         threat = row.get("threat")
