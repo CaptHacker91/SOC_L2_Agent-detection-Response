@@ -141,3 +141,23 @@ def build_incident_context(alert, related=None):
         lines.append("No related events among the currently loaded alerts.")
 
     return "\n".join(lines)
+
+
+def is_present(value):
+    """Return True when a telemetry value is genuinely present."""
+    if value is None:
+        return False
+
+    if isinstance(value, float) and pd.isna(value):
+        return False
+
+    if isinstance(value, str):
+        return value.strip().lower() not in (
+            "",
+            "none",
+            "nan",
+            "null",
+            "not available in supplied telemetry",
+        )
+
+    return True
