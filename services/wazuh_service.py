@@ -27,12 +27,16 @@ Security notes:
     is None in the normalized event.
 """
 
+import gzip
+import io
 import json
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
+import boto3
 import requests
 import urllib3
 
@@ -254,154 +258,175 @@ def _clean_host(host):
 
 
 class WazuhService:
-    """Authenticated, failure-safe client for the Wazuh Server API and Indexer."""
+    """Failure-safe Wazuh Cloud client with normalized alert output."""
 
-    TOKEN_TTL_SECONDS = 800  # Wazuh's default JWT lifetime is 900s
+    CLOUD_API_DEFAULT = "https://api.cloud.wazuh.com"
+    TOKEN_TTL_SECONDS = 3000
 
-    def __init__(self, host, api_port=55000, api_user=None, api_password=None,
-                 verify_ssl=False, indexer_port=9200, indexer_user=None,
-                 indexer_password=None, timeout=20):
-        self.host = _clean_host(host)
-        self.api_port = api_port
-        self.api_user = api_user or ""
-        self.api_password = api_password or ""
-        # The Indexer has its own users; fall back to the API user only so a
-        # single-credential setup gets a clear "auth failed" message.
-        self.indexer_port = indexer_port
-        self.indexer_user = indexer_user or self.api_user
-        self.indexer_password = indexer_password or self.api_password
+    def __init__(
+        self,
+        cloud_api_key=None,
+        cloud_id=None,
+        api_host=None,
+        verify_ssl=True,
+        timeout=30,
+    ):
+        self.cloud_api_key = (cloud_api_key or "").strip()
+        self.cloud_id = (cloud_id or "").strip()
+        self.api_host = (api_host or self.CLOUD_API_DEFAULT).rstrip("/")
         self.verify_ssl = verify_ssl
         self.timeout = timeout
-        self._token = None
-        self._token_expiry = 0.0
+
+        self._storage = None
+        self._storage_expiry = 0.0
 
         if not verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     @classmethod
     def from_env(cls):
-        """Build the service from environment variables (see .env.example)."""
+        """Build the service from Wazuh Cloud environment variables."""
         return cls(
-            host=os.getenv("WAZUH_HOST", ""),
-            api_port=_env_int("WAZUH_API_PORT", 55000),
-            api_user=os.getenv("WAZUH_API_USER"),
-            api_password=os.getenv("WAZUH_API_PASSWORD"),
-            verify_ssl=os.getenv("WAZUH_VERIFY_SSL", "false").strip().lower() == "true",
-            indexer_port=_env_int("WAZUH_INDEXER_PORT", 9200),
-            indexer_user=os.getenv("WAZUH_INDEXER_USER") or None,
-            indexer_password=os.getenv("WAZUH_INDEXER_PASSWORD") or None,
+            cloud_api_key=os.getenv("WAZUH_CLOUD_API_KEY"),
+            cloud_id=os.getenv("WAZUH_CLOUD_ID"),
+            api_host=os.getenv("WAZUH_CLOUD_API_HOST", cls.CLOUD_API_DEFAULT),
+            verify_ssl=os.getenv("WAZUH_VERIFY_SSL", "true").strip().lower() == "true",
+            timeout=_env_int("WAZUH_TIMEOUT", 30),
         )
 
     # ---- plumbing -------------------------------------------------------
 
-    @property
-    def _api_base(self):
-        return f"https://{self.host}:{self.api_port}"
-
-    @property
-    def _indexer_base(self):
-        return f"https://{self.host}:{self.indexer_port}"
-
     def _require_config(self):
-        if not self.host or not self.api_user or not self.api_password:
+        missing = []
+        if not self.cloud_api_key:
+            missing.append("WAZUH_CLOUD_API_KEY")
+        if not self.cloud_id:
+            missing.append("WAZUH_CLOUD_ID")
+        if missing:
             raise WazuhError(
-                "Wazuh is not configured. Set WAZUH_HOST, WAZUH_API_USER and "
-                "WAZUH_API_PASSWORD in your .env file."
+                "Wazuh Cloud is not configured. Set " + ", ".join(missing) + " in .env."
             )
 
     def _send(self, method, url, label, **kwargs):
-        """One HTTP call with every network failure mapped to a safe WazuhError."""
+        """One HTTP call with network failures mapped to safe WazuhError messages."""
         try:
-            return requests.request(method, url, verify=self.verify_ssl,
-                                    timeout=self.timeout, **kwargs)
+            return requests.request(
+                method,
+                url,
+                verify=self.verify_ssl,
+                timeout=self.timeout,
+                **kwargs,
+            )
         except requests.exceptions.SSLError:
             raise WazuhError(
-                f"{label}: TLS certificate verification failed. Set WAZUH_VERIFY_SSL=false "
-                "for self-signed certificates."
+                f"{label}: TLS certificate verification failed. Check WAZUH_VERIFY_SSL."
             ) from None
         except requests.exceptions.ConnectTimeout:
-            raise WazuhError(f"{label}: connection timed out reaching {self.host}.") from None
+            raise WazuhError(f"{label}: connection timed out.") from None
         except requests.exceptions.ReadTimeout:
-            raise WazuhError(f"{label}: no response from {self.host} (read timed out).") from None
+            raise WazuhError(f"{label}: no response (read timed out).") from None
         except requests.exceptions.ConnectionError:
-            raise WazuhError(f"{label}: cannot reach {self.host} (check WAZUH_HOST, port and firewall).") from None
+            raise WazuhError(f"{label}: cannot reach Wazuh Cloud API.") from None
         except requests.exceptions.RequestException:
             raise WazuhError(f"{label}: request failed.") from None
 
-    # ---- Server API -----------------------------------------------------
+    def _cloud_headers(self):
+        return {
+            "x-api-key": self.cloud_api_key,
+            "Accept": "application/json",
+        }
 
-    def authenticate(self, force=False):
-        """Obtain (and cache) a JWT from the Wazuh Server API."""
+    # ---- Wazuh Cloud API ------------------------------------------------
+
+    def get_cloud_info(self):
+        """Return Wazuh Cloud API information."""
         self._require_config()
-        if not force and self._token and time.time() < self._token_expiry:
-            return self._token
-
         response = self._send(
-            "POST", f"{self._api_base}/security/user/authenticate", "Wazuh API",
-            params={"raw": "true"}, auth=(self.api_user, self.api_password),
+            "GET",
+            f"{self.api_host}/v2/info",
+            "Wazuh Cloud API",
+            headers=self._cloud_headers(),
         )
         if response.status_code == 401:
-            raise WazuhError("Wazuh API authentication failed - check WAZUH_API_USER / WAZUH_API_PASSWORD.")
-        if response.status_code != 200:
-            raise WazuhError(f"Wazuh API returned HTTP {response.status_code} during authentication.")
-
-        token = response.text.strip().strip('"')
-        if token.startswith("{"):  # server ignored raw=true and returned JSON
-            try:
-                token = response.json().get("data", {}).get("token", "")
-            except ValueError:
-                token = ""
-        if not token:
-            raise WazuhError("Wazuh API did not return a token.")
-
-        self._token = token
-        self._token_expiry = time.time() + self.TOKEN_TTL_SECONDS
-        return token
-
-    def get_api_info(self):
-        """GET / on the Server API with the JWT. Returns the 'data' block (title, api_version, ...)."""
-        token = self.authenticate()
-        for attempt in (1, 2):
-            response = self._send("GET", f"{self._api_base}/", "Wazuh API",
-                                  headers={"Authorization": f"Bearer {token}"})
-            if response.status_code == 401 and attempt == 1:  # token expired early
-                token = self.authenticate(force=True)
-                continue
-            break
-        if response.status_code != 200:
-            raise WazuhError(f"Wazuh API returned HTTP {response.status_code} for GET /.")
-        try:
-            return response.json().get("data", {}) or {}
-        except ValueError:
-            raise WazuhError("Wazuh API returned an unreadable response for GET /.") from None
-
-    # ---- Indexer --------------------------------------------------------
-
-    def _indexer_request(self, method, path, **kwargs):
-        response = self._send(method, f"{self._indexer_base}{path}", "Wazuh Indexer",
-                              auth=(self.indexer_user, self.indexer_password), **kwargs)
-        if response.status_code == 401:
-            raise WazuhError(
-                "Wazuh Indexer authentication failed - set WAZUH_INDEXER_USER / WAZUH_INDEXER_PASSWORD "
-                "(the Indexer uses its own credentials, e.g. the 'admin' user, not the Server API user)."
-            )
-        if response.status_code == 403:
-            raise WazuhError("Wazuh Indexer user is not allowed to read wazuh-alerts-*.")
-        if response.status_code == 404:
-            raise WazuhError("No wazuh-alerts-* index found on the Wazuh Indexer yet.")
+            raise WazuhError("Wazuh Cloud API key authentication failed.")
         if response.status_code >= 400:
-            raise WazuhError(f"Wazuh Indexer returned HTTP {response.status_code}.")
-        return response
-
-    def get_indexer_info(self):
-        """GET / on the Indexer (requires auth). Returns the version number, or None."""
-        response = self._indexer_request("GET", "/")
+            raise WazuhError(
+                f"Wazuh Cloud API returned HTTP {response.status_code} for /v2/info."
+            )
         try:
-            return (response.json().get("version") or {}).get("number")
+            return response.json() or {}
         except ValueError:
-            return None
+            raise WazuhError("Wazuh Cloud API returned an unreadable /v2/info response.") from None
 
-    # ---- File mode (offline alerts file, no Wazuh server needed) ----------
+    def _get_storage_credentials(self, force=False):
+        """Get and cache temporary AWS credentials for Wazuh Cloud archive data."""
+        self._require_config()
+
+        if (
+            not force
+            and self._storage
+            and time.time() < self._storage_expiry
+        ):
+            return self._storage
+
+        response = self._send(
+            "POST",
+            f"{self.api_host}/v2/storage/token",
+            "Wazuh Cloud archive",
+            headers={
+                **self._cloud_headers(),
+                "Content-Type": "application/json",
+            },
+            json={
+                "environment_cloud_id": self.cloud_id,
+                "token_expiration": "3600",
+            },
+        )
+
+        if response.status_code == 401:
+            raise WazuhError("Wazuh Cloud API key authentication failed for archive access.")
+        if response.status_code >= 400:
+            raise WazuhError(
+                f"Wazuh Cloud archive token request returned HTTP {response.status_code}."
+            )
+
+        try:
+            payload = response.json()
+            aws = payload["aws"]
+            creds = aws["credentials"]
+            storage = {
+                "bucket": aws["s3_path"].split("/", 1)[0],
+                "prefix": aws["s3_path"].split("/", 1)[1].rstrip("/")
+                if "/" in aws["s3_path"]
+                else "",
+                "region": aws["region"],
+                "access_key_id": creds["access_key_id"],
+                "secret_access_key": creds["secret_access_key"],
+                "session_token": creds["session_token"],
+            }
+        except (KeyError, TypeError, ValueError):
+            raise WazuhError("Wazuh Cloud returned an invalid archive token response.") from None
+
+        self._storage = storage
+        self._storage_expiry = time.time() + min(
+            3000, max(60, int(creds.get("expires_in", 3600)) - 60)
+        )
+        return storage
+
+    def _s3_client(self):
+        storage = self._get_storage_credentials()
+        try:
+            return boto3.client(
+                "s3",
+                region_name=storage["region"],
+                aws_access_key_id=storage["access_key_id"],
+                aws_secret_access_key=storage["secret_access_key"],
+                aws_session_token=storage["session_token"],
+            )
+        except Exception:
+            raise WazuhError("Could not initialize Wazuh Cloud archive storage access.") from None
+
+    # ---- File mode (offline alerts file) -------------------------------
 
     @staticmethod
     def file_mode():
@@ -423,9 +448,13 @@ class WazuhService:
         try:
             parsed = json.loads(text)
             if isinstance(parsed, dict):
-                parsed = parsed.get("hits", {}).get("hits", [parsed]) if "hits" in parsed else [parsed]
+                parsed = (
+                    parsed.get("hits", {}).get("hits", [parsed])
+                    if "hits" in parsed
+                    else [parsed]
+                )
             records = [r for r in parsed if isinstance(r, dict)]
-        except json.JSONDecodeError:  # JSONL: one alert per line
+        except json.JSONDecodeError:
             for line in text.splitlines():
                 line = line.strip()
                 if line:
@@ -438,68 +467,207 @@ class WazuhService:
         events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
         return events[: max(1, min(int(limit), 1000))]
 
-    # ---- Public operations ----------------------------------------------
+    # ---- Archive parsing ------------------------------------------------
+
+    @staticmethod
+    def _parse_archive_bytes(raw_bytes):
+        """Parse a Wazuh JSON.gz archive object into alert dictionaries."""
+        try:
+            text = gzip.GzipFile(fileobj=io.BytesIO(raw_bytes)).read().decode(
+                "utf-8", errors="replace"
+            )
+        except (OSError, EOFError):
+            raise WazuhError("Wazuh Cloud returned an unreadable compressed archive file.") from None
+
+        records = []
+
+        # Archive output is JSON text; support both JSONL and a JSON array/object.
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                records.extend(r for r in parsed if isinstance(r, dict))
+            elif isinstance(parsed, dict):
+                if isinstance(parsed.get("hits"), dict):
+                    records.extend(parsed["hits"].get("hits", []))
+                else:
+                    records.append(parsed)
+            return records
+        except json.JSONDecodeError:
+            pass
+
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if isinstance(record, dict):
+                    records.append(record)
+            except json.JSONDecodeError:
+                continue
+
+        return records
+
+    @staticmethod
+    def _lookback_timedelta(lookback):
+        match = _LOOKBACK_RE.match(str(lookback))
+        if not match:
+            raise WazuhError("Invalid lookback window (use e.g. 1h, 24h, 7d, 30d).")
+
+        amount = int(str(lookback)[:-1])
+        unit = str(lookback)[-1]
+        return {
+            "s": timedelta(seconds=amount),
+            "m": timedelta(minutes=amount),
+            "h": timedelta(hours=amount),
+            "d": timedelta(days=amount),
+            "w": timedelta(weeks=amount),
+        }[unit]
+
+    def _archive_keys(self, start_dt, end_dt):
+        storage = self._get_storage_credentials()
+        prefix_base = storage["prefix"].rstrip("/")
+
+        current = datetime(start_dt.year, start_dt.month, start_dt.day, tzinfo=timezone.utc)
+        end_day = datetime(end_dt.year, end_dt.month, end_dt.day, tzinfo=timezone.utc)
+
+        while current <= end_day:
+            prefix = (
+                f"{prefix_base}/output/alerts/"
+                f"{current.year:04d}/{current.month:02d}/{current.day:02d}/"
+            )
+            yield prefix
+            current += timedelta(days=1)
+
+    def _load_archive_events(self, limit, lookback):
+        now = datetime.now(timezone.utc)
+        start = now - self._lookback_timedelta(lookback)
+        s3 = self._s3_client()
+        storage = self._get_storage_credentials()
+
+        objects = []
+        try:
+            for prefix in self._archive_keys(start, now):
+                continuation = None
+                while True:
+                    kwargs = {
+                        "Bucket": storage["bucket"],
+                        "Prefix": prefix,
+                    }
+                    if continuation:
+                        kwargs["ContinuationToken"] = continuation
+
+                    page = s3.list_objects_v2(**kwargs)
+                    objects.extend(
+                        obj
+                        for obj in page.get("Contents", [])
+                        if str(obj.get("Key", "")).endswith(".json.gz")
+                    )
+
+                    if not page.get("IsTruncated"):
+                        break
+                    continuation = page.get("NextContinuationToken")
+                    if not continuation:
+                        break
+        except Exception:
+            raise WazuhError("Could not list Wazuh Cloud archive alerts.") from None
+
+        objects.sort(key=lambda obj: obj.get("LastModified") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+        records = []
+        # Download newest files first. A file may contain many events.
+        for obj in objects:
+            try:
+                response = s3.get_object(Bucket=storage["bucket"], Key=obj["Key"])
+                records.extend(self._parse_archive_bytes(response["Body"].read()))
+            except Exception:
+                continue
+
+            if len(records) >= limit * 3:
+                break
+
+        events = []
+        for record in records:
+            event = normalize_wazuh_alert(record)
+            timestamp = event.get("timestamp")
+
+            # Keep records that are inside the requested window when a valid timestamp exists.
+            if timestamp:
+                try:
+                    ts = str(timestamp).replace("Z", "+00:00")
+                    parsed_ts = datetime.fromisoformat(ts)
+                    if parsed_ts.tzinfo is None:
+                        parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+                    if parsed_ts < start or parsed_ts > now + timedelta(minutes=5):
+                        continue
+                except ValueError:
+                    pass
+
+            events.append(event)
+
+        events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+        return events[:limit]
+
+    # ---- Public operations ---------------------------------------------
 
     def test_connection(self):
         """
-        Never raises. Returns:
-            {"connected": bool, "api_ok": bool, "indexer_ok": bool,
-             "api_version": str|None, "message": str, "details": [str, ...]}
-        'connected' is True only if BOTH the Server API (JWT) and the Indexer work,
-        because alerts cannot be fetched otherwise.
+        Never raises. Returns a status dictionary compatible with the existing UI.
         """
-        result = {"connected": False, "api_ok": False, "indexer_ok": False,
-                  "api_version": None, "message": "", "details": []}
+        result = {
+            "connected": False,
+            "api_ok": False,
+            "indexer_ok": False,
+            "api_version": None,
+            "message": "",
+            "details": [],
+        }
+
         if self.file_mode():
-            result.update(connected=True, api_ok=True, indexer_ok=True,
-                          message="Wazuh Connected (file mode)",
-                          details=[f"File mode: reading {self.events_path()}"])
+            result.update(
+                connected=True,
+                api_ok=True,
+                indexer_ok=True,
+                message="Wazuh Connected (file mode)",
+                details=[f"File mode: reading {self.events_path()}"],
+            )
             return result
+
         try:
-            info = self.get_api_info()
+            info = self.get_cloud_info()
             result["api_ok"] = True
-            result["api_version"] = info.get("api_version")
-            result["details"].append("Server API: OK")
+            result["api_version"] = info.get("version")
+            result["details"].append("Wazuh Cloud API: OK")
+
+            # Also validate that archive access is available.
+            self._get_storage_credentials()
+            result["indexer_ok"] = True
+            result["details"].append("Wazuh Cloud archive: OK")
+            result["connected"] = True
+            result["message"] = "Wazuh Cloud Connected"
         except WazuhError as exc:
-            result["details"].append(f"Server API: {exc}")
+            result["details"].append(str(exc))
+            result["message"] = "Wazuh Cloud Connection Failed"
 
-        if self.host:
-            try:
-                self.get_indexer_info()
-                result["indexer_ok"] = True
-                result["details"].append("Indexer: OK")
-            except WazuhError as exc:
-                result["details"].append(f"Indexer: {exc}")
-
-        result["connected"] = result["api_ok"] and result["indexer_ok"]
-        result["message"] = "Wazuh Connected" if result["connected"] else "Wazuh Connection Failed"
         return result
 
     def fetch_alerts(self, limit=100, lookback="24h", min_level=None):
         """
-        Fetch real alerts from the Indexer (newest first) and return them as
-        normalized events. Raises WazuhError on any failure.
+        Fetch recent real Wazuh alerts from Wazuh Cloud archive data.
+
+        Wazuh Cloud archive files are JSON.gz objects delivered to AWS S3.
         """
         if self.file_mode():
             return self.load_file_events(limit)
-        self._require_config()
+
         limit = max(1, min(int(limit), 1000))
-        if not _LOOKBACK_RE.match(str(lookback)):
-            raise WazuhError("Invalid lookback window (use e.g. 1h, 24h, 7d).")
+        events = self._load_archive_events(limit=max(limit * 2, limit), lookback=lookback)
 
-        filters = [{"range": {"@timestamp": {"gte": f"now-{lookback}"}}}]
         if min_level is not None:
-            filters.append({"range": {"rule.level": {"gte": int(min_level)}}})
-        body = {
-            "size": limit,
-            "sort": [{"@timestamp": {"order": "desc", "unmapped_type": "date"}}],
-            "query": {"bool": {"filter": filters}},
-        }
+            events = [
+                event
+                for event in events
+                if (event.get("rule_level") or 0) >= int(min_level)
+            ]
 
-        response = self._indexer_request("POST", "/wazuh-alerts-*/_search", json=body)
-        try:
-            hits = response.json().get("hits", {}).get("hits", [])
-        except ValueError:
-            raise WazuhError("Wazuh Indexer returned an unreadable response.") from None
-
-        return [normalize_wazuh_alert(hit) for hit in hits]
+        return events[:limit]
