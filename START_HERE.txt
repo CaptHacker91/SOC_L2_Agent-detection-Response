@@ -1,0 +1,50 @@
+SOC L2 AGENT - FINAL DEMO BUILD
+================================
+
+RECOMMENDED COLLEGE DEMO
+-------------------------
+Open PowerShell in this folder and run:
+    .\RUN_DEMO.bat
+
+The launcher creates/uses .venv, installs requirements, creates .env when needed,
+and starts Streamlit in local MOCK mode without requiring Wazuh, Splunk or Groq.
+
+MANUAL RUN
+----------
+    py -3.13 -m venv .venv
+    .venv\Scripts\activate
+    python -m pip install -r requirements.txt
+    Copy-Item .env.example .env
+    python -m streamlit run app.py
+
+MAIN SCREENS
+------------
+Dashboard       -> app.py
+Ingestion       -> pages/Ingestion.py
+Investigation   -> pages/Investigation.py
+Charts          -> core/visualization.py
+
+PHONE DEMO
+----------
+Run:
+    .\RUN_PHONE_DEMO.bat
+Then find the laptop IP with:
+    ipconfig
+Open:
+    http://LAPTOP-IP:8501
+on a phone connected to the same trusted Wi-Fi network.
+
+SOURCE MODES
+------------
+MOCK   = local demo telemetry; no external services required.
+WAZUH  = real Wazuh API/Indexer configuration from .env.
+SPLUNK = real Splunk REST configuration from .env.
+
+VIVA CODE NAVIGATION
+--------------------
+See CODE_MAP.md.
+
+IMPORTANT
+---------
+The project never treats MOCK data as a live source, never fabricates a successful
+Wazuh/Splunk connection, and keeps severity/risk/confidence separate from confirmation.

@@ -1,32 +1,57 @@
 [
-    {
-        "threat": "PowerShell Abuse",
-        "severity": "Critical",
-        "risk_score": 9.4,
-        "mitre": "T1059.001"
-    },
-    {
-        "threat": "Credential Dumping",
-        "severity": "Critical",
-        "risk_score": 9.8,
-        "mitre": "T1003.001"
-    },
-    {
-        "threat": "Ransomware Execution",
-        "severity": "Critical",
-        "risk_score": 10.0,
-        "mitre": "T1486"
-    },
-    {
-        "threat": "Lateral Movement",
-        "severity": "High",
-        "risk_score": 9.2,
-        "mitre": "T1021"
-    },
-    {
-        "threat": "Persistence",
-        "severity": "High",
-        "risk_score": 8.8,
-        "mitre": "T1547"
-    }
+  {
+    "threat": "PowerShell Abuse",
+    "enabled": true,
+    "description": "PowerShell-related execution identified by a supplied detection signature.",
+    "severity": "Critical",
+    "risk_score": 9.4,
+    "risk_reason": "Configured rule score for a PowerShell execution detection; impact is not independently confirmed.",
+    "mitre": "T1059.001",
+    "mitre_name": "PowerShell",
+    "mitre_tactic": "Execution"
+  },
+  {
+    "threat": "Credential Dumping",
+    "enabled": true,
+    "description": "Credential-dumping activity identified by a supplied detection signature.",
+    "severity": "Critical",
+    "risk_score": 9.8,
+    "risk_reason": "Configured rule score for credential-dumping evidence; successful credential theft is not independently confirmed.",
+    "mitre": "T1003.001",
+    "mitre_name": "LSASS Memory",
+    "mitre_tactic": "Credential Access"
+  },
+  {
+    "threat": "Ransomware Execution",
+    "enabled": true,
+    "description": "Ransomware-related execution identified by a supplied detection signature.",
+    "severity": "Critical",
+    "risk_score": 10.0,
+    "risk_reason": "Configured rule score for destructive-impact evidence; actual impact requires corroboration.",
+    "mitre": "T1486",
+    "mitre_name": "Data Encrypted for Impact",
+    "mitre_tactic": "Impact"
+  },
+  {
+    "threat": "Lateral Movement",
+    "enabled": true,
+    "description": "Lateral-movement activity identified by a supplied detection signature.",
+    "severity": "High",
+    "risk_score": 9.2,
+    "risk_reason": "Configured rule score for remote movement evidence; successful compromise of the destination is not independently confirmed.",
+    "mitre": "T1021",
+    "mitre_name": "Remote Services",
+    "mitre_tactic": "Lateral Movement"
+  },
+  {
+    "threat": "Persistence",
+    "enabled": true,
+    "description": "Persistence-related activity identified by a supplied detection signature.",
+    "severity": "High",
+    "risk_score": 8.8,
+    "risk_reason": "Configured rule score for persistence evidence; persistence success requires corroboration.",
+    "mitre": "T1547",
+    "mitre_name": "Boot or Logon Autostart Execution",
+    "mitre_tactic": "Persistence"
+  }
 ]

@@ -1,115 +1,224 @@
-from urllib.parse import urlsplit
+"""Convert Wazuh, Splunk and synthetic records to one normalized SOC event model."""
+
+# ============================================================
+# MODULE OVERVIEW / FILE KA MAIN ROLE
+# Is file ka main kaam: Different telemetry formats ko ek common normalized SOC event structure me convert karta hai.
+# Neeche ke functions/classes isi responsibility ko chhote, manageable steps me divide karte hain.
+# Presentation point: sir ko samjhate waqt is file ko isi role ke according explain kiya ja sakta hai.
+# ============================================================
+# IMPORTS: Required libraries/modules ko yaha load kiya ja raha hai.
+# In imports ka use neeche data processing, UI, API integration ya testing me hota hai.
+from __future__ import annotations
+
+from typing import Any
 
 import pandas as pd
 
+from core.models import NORMALIZED_FIELDS, clean_value, ensure_contract_columns
+from services.wazuh_service import normalize_wazuh_alert, looks_like_wazuh_event
 
+
+# CLASS: DataNormalizer
+# Role: Ye class ka main kaam Data Normalizer se related processing ko centrally handle karna hai.
+# Is class ke methods milkar ek focused responsibility ko handle karte hain.
 class DataNormalizer:
-    """
-    Converts parsed records into a DataFrame.
+    """Normalize source-specific dictionaries while preserving original telemetry."""
 
-    IMPORTANT: every original source column is preserved untouched. This
-    class ADDS a set of normalized fields on top, so the rest of the app has
-    a stable interface regardless of which source produced the row:
+    # FUNCTION: __init__
+    # Purpose: Ye function ka main kaam init se related processing ko centrally handle karna hai.
+    # Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def __init__(self) -> None:
+        self.errors: list[str] = []
 
-        source_ip, hostname, username, url, domain, event_time, filename,
-        uri_path, uri_query, http_method, http_status, referer, user_agent,
-        raw_event, dst_ip, process, command_line, file_hash
+    # FUNCTION: normalize
+    # Purpose: Ye function normalize operation handle karta hai.
+    # Input: parsed_data, source_mode.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def normalize(self, parsed_data: list[dict[str, Any]] | None, source_mode: str = "MOCK") -> pd.DataFrame:
+        self.errors = []
+        rows: list[dict[str, Any]] = []
+        # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+        for index, record in enumerate(parsed_data or []):
+            # External/file/network ya risky operation ko safely handle karne ke liye yaha exception handling use ho rahi hai.
+            try:
+                rows.append(self.normalize_record(record, source_mode=source_mode))
+            except Exception as exc:
+                # Ek malformed event ki wajah se poora dataset fail nahi hona chahiye.
+                self.errors.append(f"Record {index}: normalization failed ({type(exc).__name__}).")
+                rows.append(self._safe_fallback(record, source_mode))
 
-    A value is left as None when the source event genuinely does not
-    contain the corresponding data - never fabricated.
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if not rows:
+            return pd.DataFrame(columns=NORMALIZED_FIELDS)
 
-    Mapping from the normalized event contract (services/wazuh_service.py):
-        source_ip  <- src_ip
-        hostname   <- host
-        event_time <- timestamp
-        username   <- username
-        url        <- url
-        domain     <- domain
-        filename   <- filename
-        raw_event  <- raw_event
-    Legacy access-log style fields (clientip, uri, _time, _raw, ...) are still
-    accepted as fallbacks so older-shaped records keep working.
-    """
+        df = ensure_contract_columns(pd.DataFrame(rows))
+        df = self._ensure_unique_ids(df)
+        df = df.reset_index(drop=True)
+        return df
 
-    def normalize(self, parsed_data):
-        df = pd.DataFrame(parsed_data)
-        if df.empty:
-            return df
+    # FUNCTION: normalize_record
+    # Purpose: Ye function normalize record operation handle karta hai.
+    # Input: record, source_mode.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def normalize_record(self, record: dict[str, Any], source_mode: str = "MOCK") -> dict[str, Any]:
+        """Normalize a single record and retain the raw event exactly enough for investigation."""
+        source_mode = (source_mode or "MOCK").upper()
+        category = record.get("event_category") or "other"
 
-        df.columns = [c.lower().strip().replace(" ", "_") for c in df.columns]
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if category == "wazuh" or looks_like_wazuh_event(record):
+            # Jo record pehle se normalized hai use unnecessary transformation ke bina preserve kiya jaata hai.
+            # Raw Wazuh documents ke liye neeche diya gaya integration extractor use hota hai.
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if record.get("raw_event") is not None and any(record.get(key) is not None for key in ("hostname", "source_ip", "rule_id")):
+                normalized = self._normalize_existing_contract(record, source_mode)
+            else:
+                normalized = normalize_wazuh_alert(record, display_source=source_mode)
+        else:
+            normalized = self._normalize_generic(record, source_mode)
 
-        df["source_ip"]    = self._first(df, "src_ip", "clientip")
-        df["hostname"]     = self._first(df, "host")
-        df["username"]     = self._first(df, "username", "user").apply(self._clean_user)
-        df["url"]          = self._first(df, "url", "uri")
-        df["http_method"]  = self._first(df, "http_method", "method")
-        df["http_status"]  = pd.to_numeric(self._first(df, "http_status", "status"), errors="coerce")
-        df["referer"]      = self._first(df, "referer")
-        df["domain"]       = self._first(df, "domain", "referer_domain", "referer")
-        df["user_agent"]   = self._first(df, "user_agent", "useragent")
-        df["event_time"]   = self._first(df, "timestamp", "_time")
-        df["raw_event"]    = self._first(df, "raw_event", "_raw")
-        df["dst_ip"]       = self._first(df, "dst_ip")
-        df["process"]      = self._first(df, "process")
-        df["command_line"] = self._first(df, "command_line")
-        df["file_hash"]    = self._first(df, "file_hash")
+        normalized["event_category"] = category
+        normalized["source"] = source_mode
+        normalized["source_type"] = category
+        return normalized
 
-        # uri_path / uri_query: use the source's own values, otherwise derive
-        # them from the URL that is actually present (nothing is invented).
-        derived_path  = df["url"].apply(lambda u: self._split_url(u)[0])
-        derived_query = df["url"].apply(lambda u: self._split_url(u)[1])
-        uri_path  = self._col(df, "uri_path")
-        uri_query = self._col(df, "uri_query")
-        df["uri_path"]  = uri_path.where(uri_path.notna(), derived_path)
-        df["uri_query"] = uri_query.where(uri_query.notna(), derived_query)
 
-        df["filename"] = df.apply(self._pick_filename, axis=1)
+    # FUNCTION: _normalize_existing_contract
+    # Purpose: Ye internal helper normalize existing contract operation handle karta hai.
+    # Input: record, source_mode.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _normalize_existing_contract(self, record: dict[str, Any], source_mode: str) -> dict[str, Any]:
+        """Keep already-normalized records stable when the core pipeline is called repeatedly."""
+        row = {key: clean_value(record.get(key)) for key in NORMALIZED_FIELDS}
+        row["raw_event"] = record.get("raw_event")
+        row["source"] = source_mode.upper()
+        row["source_type"] = record.get("source_type") or record.get("event_category") or "other"
+        row["destination_ip"] = clean_value(record.get("destination_ip") or record.get("dst_ip"))
+        row["dst_ip"] = row["destination_ip"]
+        row["command"] = clean_value(record.get("command") or record.get("command_line"))
+        row["command_line"] = row["command"]
+        return row
 
-        # raw_event holds a dict for contract events (unhashable), so
-        # de-duplicate on the hashable columns only.
-        hashable = [c for c in df.columns
-                    if not df[c].map(lambda v: isinstance(v, (dict, list, set))).any()]
-        df = df.drop_duplicates(subset=hashable)
+    # FUNCTION: _normalize_generic
+    # Purpose: Ye internal helper normalize generic operation handle karta hai.
+    # Input: record, source_mode.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _normalize_generic(self, record: dict[str, Any], source_mode: str) -> dict[str, Any]:
+        row = {key: None for key in NORMALIZED_FIELDS}
 
-        # Uniform "missing" representation: None (not NaN / <NA>), so
-        # `value or "not available"` checks downstream behave correctly.
-        df = df.astype(object).where(df.notna(), None)
-        return df.reset_index(drop=True)
+        row["id"] = self._first(record, "id", "event_id", "eventid", "_cd")
+        row["timestamp"] = self._first(record, "timestamp", "event_time", "_time", "time")
+        row["threat"] = clean_value(record.get("threat"))
+        row["signature"] = clean_value(record.get("signature"))
+        row["rule_type"] = clean_value(record.get("rule_type"))
+        row["tool"] = clean_value(record.get("tool"))
+        row["hostname"] = self._first(record, "hostname", "host")
+        row["username"] = self._clean_user(self._first(record, "username", "user", "srcuser"))
+        row["source_ip"] = self._first(record, "source_ip", "src_ip", "clientip", "srcip")
+        row["destination_ip"] = self._first(record, "destination_ip", "dst_ip", "dest_ip", "dstip")
+        row["dst_ip"] = row["destination_ip"]
+        row["event_type"] = self._first(record, "event_type", "event_type_name", "sourcetype", "type")
+        row["description"] = self._first(record, "description", "message", "msg", "threat")
+        row["rule_id"] = self._first(record, "rule_id", "rule") if not isinstance(record.get("rule"), dict) else None
+        row["rule_level"] = self._first(record, "rule_level", "level")
+        row["rule_groups"] = self._first(record, "rule_groups", "groups")
+        row["mitre_technique"] = self._first(record, "mitre_technique", "mapped_technique", "mitre")
+        row["mitre_tactic"] = self._first(record, "mitre_tactic")
+        row["process"] = self._first(record, "process", "process_name")
+        row["command"] = self._first(record, "command", "command_line")
+        row["command_line"] = row["command"]
+        row["url"] = self._first(record, "url", "uri")
+        row["domain"] = self._first(record, "domain", "referer_domain")
+        row["filename"] = self._first(record, "filename", "file")
+        row["file_hash"] = self._first(record, "file_hash", "hash", "sha256", "sha1", "md5")
+        row["http_method"] = self._first(record, "http_method", "method")
+        row["http_status"] = self._to_int(self._first(record, "http_status", "status"))
+        row["uri_path"] = self._first(record, "uri_path")
+        row["uri_query"] = self._first(record, "uri_query")
+        row["referer"] = self._first(record, "referer")
+        row["user_agent"] = self._first(record, "user_agent", "useragent")
+        row["original_log"] = self._first(record, "original_log", "_raw")
+        row["raw_event"] = record
+        return {k: clean_value(v) for k, v in row.items()}
 
     @staticmethod
-    def _col(df, name):
-        """Returns df[name] if it exists, else an all-None Series of matching length/index."""
-        if name in df.columns:
-            return df[name]
-        return pd.Series([None] * len(df), index=df.index, dtype=object)
-
-    @classmethod
-    def _first(cls, df, *names):
-        """Row-wise first non-null value among the given columns (None if none exist)."""
-        result = pd.Series([None] * len(df), index=df.index, dtype=object)
-        for name in names:
-            if name in df.columns:
-                result = result.where(result.notna(), df[name])
-        return result
-
-    @staticmethod
-    def _split_url(url):
-        if url is None or str(url).strip() in ("", "nan", "None"):
-            return (None, None)
-        parts = urlsplit(str(url))
-        return (parts.path or None, parts.query or None)
-
-    @staticmethod
-    def _clean_user(val):
-        if val is None:
-            return None
-        val = str(val).strip()
-        return None if val in ("", "-", "nan", "None") else val
-
-    @staticmethod
-    def _pick_filename(row):
-        for key in ("filename", "file", "uri_path"):
-            f = row.get(key)
-            if f is not None and str(f).strip() not in ("", "nan", "None"):
-                return f
+    # FUNCTION: _first
+    # Purpose: Ye internal helper ka main kaam first se related processing ko centrally handle karna hai.
+    # Input: record, *keys.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _first(record: dict[str, Any], *keys: str) -> Any:
+        # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+        for key in keys:
+            value = record.get(key)
+            value = clean_value(value)
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if value is not None:
+                return value
         return None
+
+    @staticmethod
+    # FUNCTION: _clean_user
+    # Purpose: Ye internal helper clean user operation handle karta hai.
+    # Input: value.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _clean_user(value: Any) -> Any:
+        value = clean_value(value)
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @staticmethod
+    # FUNCTION: _to_int
+    # Purpose: Ye internal helper ka main kaam to int se related processing ko centrally handle karna hai.
+    # Input: value.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _to_int(value: Any) -> int | None:
+        # External/file/network ya risky operation ko safely handle karne ke liye yaha exception handling use ho rahi hai.
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    # FUNCTION: _ensure_unique_ids
+    # Purpose: Ye internal helper ensure unique ids operation handle karta hai.
+    # Input: df.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _ensure_unique_ids(df: pd.DataFrame) -> pd.DataFrame:
+        ids: list[str] = []
+        seen: dict[str, int] = {}
+        # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+        for index, value in enumerate(df["id"].tolist()):
+            base = str(value).strip() if clean_value(value) is not None else f"event-{index + 1:04d}"
+            count = seen.get(base, 0)
+            seen[base] = count + 1
+            ids.append(base if count == 0 else f"{base}-{count + 1}")
+        df["id"] = ids
+        return df
+
+    @staticmethod
+    # FUNCTION: _safe_fallback
+    # Purpose: Ye internal helper ka main kaam safe fallback se related processing ko centrally handle karna hai.
+    # Input: record, source_mode.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+    def _safe_fallback(record: Any, source_mode: str) -> dict[str, Any]:
+        return {
+            **{key: None for key in NORMALIZED_FIELDS},
+            "source": source_mode.upper(),
+            "source_type": "other",
+            "event_category": "other",
+            "raw_event": record,
+            "description": "Event could not be fully normalized; original telemetry was preserved.",
+        }

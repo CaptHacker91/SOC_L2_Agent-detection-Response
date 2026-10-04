@@ -1,11 +1,10 @@
-pandas
-numpy
-scikit-learn
-python-dotenv
-groq
-requests
-boto3
-plotly
-streamlit
-fpdf2
-requests
+    # Core runtime - Python 3.13 compatible
+pandas>=2.2,<4
+requests>=2.32,<3
+python-dotenv>=1.0,<2
+streamlit>=1.40,<2
+plotly>=5.24,<7
+fpdf2>=2.8,<3
+
+# Optional AI integration (the app still runs without an API key)
+groq>=0.13,<1

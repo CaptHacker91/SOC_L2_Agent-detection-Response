@@ -1,260 +1,362 @@
-import html
-import json
+"""Incident Investigation workspace.
+
+The page presents evidence first. Recommendations, AI output and PDF generation
+are downstream views of the selected telemetry and are clearly labelled as such.
+"""
+
+# ============================================================
+# MODULE OVERVIEW / FILE KA MAIN ROLE
+# Is file ka main kaam: Selected incident ki evidence-first investigation, AI assistance aur PDF reporting UI provide karta hai.
+# Neeche ke functions/classes isi responsibility ko chhote, manageable steps me divide karte hain.
+# Presentation point: sir ko samjhate waqt is file ko isi role ke according explain kiya ja sakta hai.
+# ============================================================
+# IMPORTS: Required libraries/modules ko yaha load kiya ja raha hai.
+# In imports ka use neeche data processing, UI, API integration ya testing me hota hai.
+from __future__ import annotations
+
 import os
+
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from core.pipeline import load_pipeline
+from core.pipeline import load_pipeline, refresh_data
+from core.security import safe_json
+from core.ui import apply_theme, page_header, section_title
 from services.chatbot_service import ChatbotService
 from services.incident_context import find_related_events
 from services.llm_service import LLMService
-from services.report_service import generate_pdf, get_recommendations, build_report_data
+from services.report_service import build_report_data, generate_pdf, get_recommendations
 
-load_dotenv(override=True)
-st.set_page_config(page_title="Investigation | SOC L2 Agent", page_icon="🔎", layout="wide")
-
+load_dotenv(override=False)
 NA_TEXT = "Not available in supplied telemetry"
 
-CSS = """
-<style>
-.stApp{ background:#eee8dc; }
-.sec-heading{ color:#4f6428; font-size:19px; font-weight:800; margin:22px 0 10px;
-       border-bottom:3px solid rosybrown; padding-bottom:8px; }
-.field-box{ background:#fffdf8; padding:14px; border-radius:10px; box-shadow:0 2px 8px rgba(65,50,35,.08); }
-.field-label{ font-size:11px; font-weight:800; color:saddlebrown; letter-spacing:.04em; }
-.field-val{ font-size:14px; color:#2f3e2f; margin-top:2px; }
-.field-na{ color:#aaa; font-style:italic; }
-.ioc-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
-.ioc-item{ background:#fffdf8; padding:14px; border-radius:10px; box-shadow:0 2px 8px rgba(65,50,35,.08); }
-.ioc-type{ font-size:11px; font-weight:800; color:saddlebrown; }
-.ioc-val{ font-size:14px; margin-top:2px; word-break:break-all; }
-.ioc-na{ color:#aaa; font-style:italic; }
-.findings-box{ background:#2f3e2f; color:#dce8c4; padding:16px; border-radius:10px; font-family:monospace; font-size:13px; }
-.ai-label{ font-size:12px; color:#a15c1c; font-weight:700; margin-bottom:8px; }
-</style>
-"""
-st.markdown(CSS, unsafe_allow_html=True)
 
-
-@st.cache_resource
-def _get_chatbot():
+# FUNCTION: _get_chatbot
+# Purpose: Ye internal helper get chatbot operation handle karta hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _get_chatbot() -> ChatbotService:
+    """Create the optional incident-aware Groq chat service."""
     return ChatbotService(os.getenv("GROQ_API_KEY", ""))
 
 
-@st.cache_resource
-def _get_investigator():
+# FUNCTION: _get_investigator
+# Purpose: Ye internal helper get investigator operation handle karta hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _get_investigator() -> LLMService:
+    """Create the optional Groq investigation-report service."""
     return LLMService(os.getenv("GROQ_API_KEY", ""))
 
 
-def _is_real(value):
-    """Treat missing/placeholder-looking values as absent, not just falsy ones."""
-    if value is None:
-        return False
-    s = str(value).strip().lower()
-    return s not in ("", "none", "nan", "null")
+# FUNCTION: value
+# Purpose: Ye function ka main kaam value se related processing ko centrally handle karna hai.
+# Input: alert, key.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def value(alert: dict, key: str):
+    """Return a consistent missing-data placeholder for the Investigation UI."""
+    current = alert.get(key)
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if current is None or str(current).strip().lower() in {"", "none", "nan", "null"}:
+        return NA_TEXT
+    return current
 
 
-def esc(value):
-    """HTML-escape telemetry before it goes into unsafe_allow_html markup (log data is attacker-controlled)."""
-    return html.escape(str(value))
+# FUNCTION: _select_alert
+# Purpose: Ye internal helper ka main kaam select alert se related processing ko centrally handle karna hai.
+# Input: df.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _select_alert(df: pd.DataFrame) -> str | None:
+    """Select a detection by ID, while remaining safe for empty datasets and stale state."""
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if "id" not in df.columns:
+        return None
+    candidates = df.copy()
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if "final_detection" in candidates.columns:
+        detections = candidates[candidates["final_detection"] != "Normal"]
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if not detections.empty:
+            candidates = detections
+    ids = [str(x) for x in candidates["id"].tolist()]
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if not ids:
+        return None
+    current = str(st.session_state.get("selected_alert_id", ""))
+    index = ids.index(current) if current in ids else 0
+    selected = st.selectbox(
+        "Select incident", ids, index=index,
+        format_func=lambda ident: _incident_label(candidates, ident), key="investigation_selector",
+    )
+    st.session_state["selected_alert_id"] = str(selected)
+    return str(selected)
 
 
-def field(label, value):
-    val_html = f'<div class="field-val">{esc(value)}</div>' if _is_real(value) else f'<div class="field-val field-na">{NA_TEXT}</div>'
-    return f'<div class="field-box"><div class="field-label">{label}</div>{val_html}</div>'
+# FUNCTION: _incident_label
+# Purpose: Ye internal helper ka main kaam incident label se related processing ko centrally handle karna hai.
+# Input: df, ident.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _incident_label(df: pd.DataFrame, ident: str) -> str:
+    """Build a compact label showing ID, severity and threat without long wrapping."""
+    row = df[df["id"].astype(str) == str(ident)]
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if row.empty:
+        return ident
+    data = row.iloc[0]
+    return f"{ident}  •  {data.get('severity', 'Normal')}  •  {str(data.get('threat', 'Unclassified Event'))[:64]}"
 
 
-def ioc_card(label, value):
-    val_html = f'<div class="ioc-val">{esc(value)}</div>' if _is_real(value) else f'<div class="ioc-val ioc-na">{NA_TEXT}</div>'
-    return f'<div class="ioc-item"><div class="ioc-type">{label}</div>{val_html}</div>'
+# FUNCTION: _render_metadata
+# Purpose: Ye internal helper render metadata operation handle karta hai.
+# Input: alert.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _render_metadata(alert: dict) -> None:
+    """Render core normalized event metadata in a stable two-column table."""
+    fields = {
+        "Timestamp": value(alert, "timestamp"),
+        "Data Source": value(alert, "source"),
+        "Host": value(alert, "hostname"),
+        "Agent ID": value(alert, "agent_id"),
+        "Agent IP": value(alert, "agent_ip"),
+        "Source IP": value(alert, "source_ip"),
+        "Destination IP": value(alert, "destination_ip"),
+        "Username": value(alert, "username"),
+        "Event Type": value(alert, "event_type"),
+        "Rule ID": value(alert, "rule_id"),
+        "Rule Level": value(alert, "rule_level"),
+        "Rule Groups": value(alert, "rule_groups"),
+    }
+    st.dataframe(pd.DataFrame(list(fields.items()), columns=["Field", "Value"]), use_container_width=True, hide_index=True)
 
 
-def main():
+# FUNCTION: _render_sidebar
+# Purpose: Ye internal helper render sidebar operation handle karta hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _render_sidebar() -> None:
+    """Render navigation and a safe reload action."""
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with st.sidebar:
+        st.markdown("## Navigation")
+        st.page_link("app.py", label="Dashboard", icon="📊")
+        st.page_link("pages/Ingestion.py", label="Ingestion Center", icon="📥")
+        st.page_link("pages/Investigation.py", label="Investigation", icon="🔎")
+        st.divider()
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if st.button("Reload Current Dataset", use_container_width=True, key="investigation_reload"):
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with st.spinner("Reloading telemetry..."):
+                refresh_data()
+            st.rerun()
+        st.caption("Evidence below comes from the currently loaded dataset.")
+
+
+# FUNCTION: main
+# Purpose: Ye function ka main kaam main se related processing ko centrally handle karna hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def main() -> None:
+    """Render the selected incident, related telemetry, recommendations, AI and PDF."""
+    st.set_page_config(page_title="Investigation | SOC L2 Agent", page_icon="🔎", layout="wide")
+    apply_theme(st)
+    _render_sidebar()
     df = load_pipeline()
-    if df.empty:
-        st.error("No data loaded. Go back to the dashboard.")
+    page_header(st, "Incident Investigation", "Evidence → Context → Recommendations → Optional AI → Incident Report")
+
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if df is None or df.empty:
+        st.warning("No telemetry is loaded. Open Ingestion Center and run MOCK ingestion or a configured live source.")
         return
 
-    inc_id = st.session_state.get("selected_alert_id")
+    inc_id = _select_alert(df)
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
     if inc_id is None:
-        st.warning("No alert selected. Go back to the dashboard and click 'Investigate' on an alert.")
+        st.info("No incident is available for investigation in the current dataset.")
         return
 
-    match = df[df["id"] == str(inc_id)]
+    match = df[df["id"].astype(str) == str(inc_id)]
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
     if match.empty:
-        st.error(f"Alert {inc_id} not found in the current dataset.")
+        st.error(f"Incident {inc_id} is not present in the current dataset.")
         return
-    a = match.iloc[0].to_dict()
-    related = find_related_events(df, a)
+    alert = match.iloc[0].to_dict()
+    related = find_related_events(df, alert)
 
-    # ── 1. Incident Header ───────────────────────────────────────────────────
-    st.markdown(f"## 🔎 Incident {inc_id}")
-    c = st.columns(4)
-    c[0].markdown(field("ALERT NAME", a.get("threat")), unsafe_allow_html=True)
-    c[1].markdown(field("TIMESTAMP", a.get("event_time")), unsafe_allow_html=True)
-    c[2].markdown(field("SEVERITY", a.get("severity")), unsafe_allow_html=True)
-    c[3].markdown(field("RISK SCORE", f"{a.get('risk_score')}/10" if a.get("risk_score") is not None else None), unsafe_allow_html=True)
-    c2 = st.columns(4)
-    c2[0].markdown(field("HOST", a.get("hostname")), unsafe_allow_html=True)
-    c2[1].markdown(field("SOURCE IP", a.get("source_ip")), unsafe_allow_html=True)
-    c2[2].markdown(field("USERNAME", a.get("username")), unsafe_allow_html=True)
-    c2[3].markdown(field("DETECTION", a.get("final_detection")), unsafe_allow_html=True)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with st.container(border=True):
+        section_title(st, "Incident Summary", f"Incident ID: `{inc_id}`  •  Source: **{value(alert, 'source')}**")
+        first = st.columns(3)
+        second = st.columns(2)
+        first[0].metric("Severity", value(alert, "severity"))
+        first[1].metric("Risk", f"{alert.get('risk_score')}/10" if alert.get("risk_score") is not None else NA_TEXT)
+        first[2].metric("Confidence", value(alert, "confidence_level"))
+        second[0].metric("Detection", value(alert, "final_detection"))
+        second[1].metric("Confirmation", value(alert, "confirmation_status"))
+        st.caption(value(alert, "detection_reason"))
 
-    # ── 2. MITRE ATT&CK ───────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🎯 MITRE ATT&CK Mapping</div>', unsafe_allow_html=True)
-    m = st.columns(2)
-    mapped = a.get("mapped_technique") not in (None, "Not mapped from supplied telemetry")
-    m[0].markdown(field("TECHNIQUE ID", a.get("mapped_technique") if mapped else None), unsafe_allow_html=True)
-    m[1].markdown(field("TECHNIQUE NAME", a.get("mitre_technique_name") if mapped else None), unsafe_allow_html=True)
-    m2 = st.columns(2)
-    m2[0].markdown(field("TACTIC", a.get("mitre_tactic") if mapped else None), unsafe_allow_html=True)
-    m2[1].markdown(field("CONTEXT", a.get("detection_reason")), unsafe_allow_html=True)
-    if not mapped:
-        st.caption("⚠️ This telemetry does not, by itself, support a confident MITRE ATT&CK mapping.")
+    tabs = st.tabs(["Details", "Evidence", "Related Events", "Recommendations", "AI & Report"])
 
-    # ── 3. Detection Evidence & Logs ─────────────────────────────────────────
-    st.markdown('<div class="sec-heading">📄 Detection Evidence & Logs</div>', unsafe_allow_html=True)
-    w = st.columns(3)
-    w[0].markdown(field("SIEM RULE ID", a.get("rule_id")), unsafe_allow_html=True)
-    w[1].markdown(field("SIEM RULE LEVEL (0-15)", a.get("rule_level")), unsafe_allow_html=True)
-    w[2].markdown(field("RULE GROUPS", a.get("rule_groups")), unsafe_allow_html=True)
-    e = st.columns(3)
-    e[0].markdown(field("EVENT TIME", a.get("event_time")), unsafe_allow_html=True)
-    e[1].markdown(field("HTTP METHOD", a.get("http_method")), unsafe_allow_html=True)
-    e[2].markdown(field("HTTP STATUS", a.get("http_status")), unsafe_allow_html=True)
-    e2 = st.columns(3)
-    e2[0].markdown(field("URI PATH", a.get("uri_path")), unsafe_allow_html=True)
-    e2[1].markdown(field("URI QUERY", a.get("uri_query")), unsafe_allow_html=True)
-    e2[2].markdown(field("REFERER", a.get("referer")), unsafe_allow_html=True)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[0]:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "Alert Metadata")
+            _render_metadata(alert)
+            section_title(st, "Detection Reasoning")
+            st.write(value(alert, "detection_reason"))
+            st.write(f"**Risk reasoning:** {value(alert, 'risk_justification')}")
+            st.write(f"**Confidence reasoning:** {value(alert, 'confidence_reason')}")
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "MITRE ATT&CK", "Mapping is preserved from supplied telemetry or explicit configured rules.")
+            mitre_rows = pd.DataFrame(
+                [
+                    ["Technique ID", value(alert, "mapped_technique")],
+                    ["Technique Name", value(alert, "mitre_technique_name")],
+                    ["Tactic", value(alert, "mitre_tactic")],
+                    ["Mapping Source", value(alert, "mitre_mapping_source")],
+                ],
+                columns=["Field", "Value"],
+            )
+            st.dataframe(mitre_rows, use_container_width=True, hide_index=True)
 
-    raw_preview = a.get("original_log") if _is_real(a.get("original_log")) else a.get("raw_event")
-    if isinstance(raw_preview, (dict, list)):
-        raw_preview = json.dumps(raw_preview, default=str, ensure_ascii=False)
-    raw_preview = (str(raw_preview)[:300] + "…") if _is_real(raw_preview) else NA_TEXT
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[1]:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "Observed Event Fields")
+            evidence_rows = {
+                "Process": value(alert, "process"),
+                "Command": value(alert, "command"),
+                "Filename": value(alert, "filename"),
+                "File Hash": value(alert, "file_hash"),
+                "Domain": value(alert, "domain"),
+                "URL": value(alert, "url"),
+                "URI Path": value(alert, "uri_path"),
+                "HTTP Method": value(alert, "http_method"),
+                "HTTP Status": value(alert, "http_status"),
+            }
+            st.dataframe(pd.DataFrame(list(evidence_rows.items()), columns=["Field", "Value"]), use_container_width=True, hide_index=True)
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with st.expander("View redacted raw event"):
+                st.code(safe_json(alert.get("raw_event"), max_chars=14000), language="json", wrap_lines=True)
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if alert.get("original_log"):
+                # Resource/context ko safely open karke operation complete kiya ja raha hai.
+                with st.expander("View redacted original log"):
+                    st.code(safe_json(alert.get("original_log"), max_chars=9000), wrap_lines=True)
 
-    st.markdown(f"""<div class="findings-box">
-Threat          : {esc(a.get('threat'))}
-Rule Type       : {esc(a.get('rule_type'))}
-Tool            : {esc(a.get('tool'))}
-Detection       : {esc(a.get('final_detection'))}
-Detection Reason: {esc(a.get('detection_reason'))}
-Risk Reasoning  : {esc(a.get('risk_justification'))}
-Command Line    : {esc(a.get('command_line')) if _is_real(a.get('command_line')) else NA_TEXT}
-URI             : {esc(a.get('url')) if _is_real(a.get('url')) else NA_TEXT}
-Raw Event       : {esc(raw_preview)}
-</div>""", unsafe_allow_html=True)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[2]:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, f"Related Events ({len(related)})")
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if related:
+                st.dataframe(pd.DataFrame(related), use_container_width=True, hide_index=True, height=480)
+            else:
+                st.info("No related events were found using the available source IP / host + rule evidence.")
 
-    with st.expander(f"🔗 Related events ({len(related)}) — same source IP, or same host + rule"):
-        if related:
-            for r in related:
-                st.text(f"[{r['id']}] {r['line']}")
-        else:
-            st.caption("No related events among the currently loaded alerts.")
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[3]:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            rec = get_recommendations(alert.get("mitre_tactic"), alert.get("severity"))
+            r1, r2, r3 = st.columns(3)
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with r1:
+                section_title(st, "Investigation")
+                # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+                for item in rec.get("investigation", []):
+                    st.write(f"- {item}")
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with r2:
+                section_title(st, "Containment")
+                # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+                for item in rec.get("containment", []):
+                    st.write(f"- {item}")
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with r3:
+                section_title(st, "Remediation")
+                # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+                for item in rec.get("remediation", []):
+                    st.write(f"- {item}")
 
-    # ── 4. IOC Section ────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🔴 Indicators of Compromise (IOC)</div>', unsafe_allow_html=True)
-    st.markdown(f"""<div class="ioc-grid">
-      {ioc_card("Source IP",      a.get("source_ip"))}
-      {ioc_card("Destination IP", a.get("dst_ip"))}
-      {ioc_card("Hostname",       a.get("hostname"))}
-      {ioc_card("Username",       a.get("username"))}
-      {ioc_card("Process",        a.get("process"))}
-      {ioc_card("Domain",         a.get("domain"))}
-      {ioc_card("URL",            a.get("url"))}
-      {ioc_card("File Hash",      a.get("file_hash"))}
-      {ioc_card("Filename",       a.get("filename"))}
-    </div>""", unsafe_allow_html=True)
-    st.caption("Fields shown as unavailable genuinely are not present in this event's telemetry — nothing here is fabricated.")
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[4]:
+        investigator = _get_investigator()
+        chatbot = _get_chatbot()
+        report_key = f"ai_report_{inc_id}"
+        chat_key = f"chat_history_{inc_id}"
+        st.session_state.setdefault(report_key, None)
+        st.session_state.setdefault(chat_key, [])
 
-    # ── 5. Business Impact & Recommendations ─────────────────────────────────
-    st.markdown('<div class="sec-heading">💼 Business Impact & SOC Recommendations</div>', unsafe_allow_html=True)
-    st.markdown(field("BUSINESS IMPACT", a.get("business_impact")), unsafe_allow_html=True)
-    st.markdown(field("INVESTIGATION PRIORITY", a.get("investigation_priority")), unsafe_allow_html=True)
-    rec = get_recommendations(a.get("mitre_tactic"), a.get("severity"))
-    st.markdown("**Investigation Steps:**")
-    for step in rec.get("investigation", []):
-        st.markdown(f"- {step}")
-    st.markdown("**Containment Actions:**")
-    for step in rec.get("containment", []):
-        st.markdown(f"- {step}")
-    st.markdown("**Remediation Steps:**")
-    for step in rec.get("remediation", []):
-        st.markdown(f"- {step}")
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "AI-Assisted Investigation")
+            st.caption("Advisory only. AI output never replaces telemetry evidence or analyst confirmation.")
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if not investigator.available:
+                st.info(investigator.status_message)
+            else:
+                # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+                if st.button("Generate AI Investigation Report", type="primary", use_container_width=True, key=f"generate_ai_{inc_id}"):
+                    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+                    with st.spinner("Generating grounded incident analysis..."):
+                        st.session_state[report_key] = investigator.investigate(alert, related)
+                # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+                if st.session_state[report_key]:
+                    st.markdown(st.session_state[report_key])
+                    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+                    if st.button("Regenerate AI Report", use_container_width=True, key=f"regen_ai_{inc_id}"):
+                        st.session_state[report_key] = None
+                        st.rerun()
 
-    # ── 6. AI Investigation Report ────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">🧠 AI Investigation Report</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ai-label">⚠️ AI-generated report. Verify against telemetry before acting.</div>', unsafe_allow_html=True)
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "PDF Incident Report")
+            # External/file/network ya risky operation ko safely handle karne ke liye yaha exception handling use ho rahi hai.
+            try:
+                ai_summary = st.session_state.get(report_key) or "AI analysis not generated."
+                pdf_bytes = generate_pdf(build_report_data(alert, ai_summary))
+                st.download_button(
+                    "Download Incident PDF", data=pdf_bytes,
+                    file_name=f"SOC_Report_{str(inc_id).replace('/', '_')}.pdf",
+                    mime="application/pdf", use_container_width=True, key=f"pdf_{inc_id}",
+                )
+                st.caption("The PDF is generated from the selected incident, conservative recommendations and optional AI text.")
+            except Exception as exc:
+                st.error(f"PDF generation failed safely: {type(exc).__name__}.")
 
-    report_key = f"ai_report_{inc_id}"
-    if report_key not in st.session_state:
-        st.session_state[report_key] = None
-
-    if st.session_state[report_key] is None:
-        if st.button("🧠 Generate AI Investigation Report"):
-            with st.spinner("Generating executive summary, root cause & recommendations…"):
-                try:
-                    st.session_state[report_key] = _get_investigator().investigate(a, related)
-                except Exception as ex:
-                    st.session_state[report_key] = f"Error generating report: {ex}"
-            st.rerun()
-    else:
-        st.markdown(
-            f'<div class="findings-box" style="white-space:pre-wrap;line-height:1.7;font-size:13px">'
-            f'{esc(st.session_state[report_key])}</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("🔄 Regenerate Report"):
-            st.session_state[report_key] = None
-            st.rerun()
-
-    # ── 7. PDF Download ───────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">📑 Incident Report</div>', unsafe_allow_html=True)
-    ai_summary_parts = []
-    report_text = st.session_state.get(report_key)
-    if report_text:
-        ai_summary_parts.append(report_text)
-    chat_key = f"chat_history_{inc_id}"
-    if st.session_state.get(chat_key):
-        chat_text = "\n\n".join(
-            f"Q: {m['content']}" if m["role"] == "user" else f"A: {m['content']}"
-            for m in st.session_state[chat_key]
-        )
-        ai_summary_parts.append("--- Analyst Chat Log ---\n" + chat_text)
-    ai_summary = "\n\n".join(ai_summary_parts)
-
-    try:
-        report_data = build_report_data(a, ai_summary)
-        pdf_bytes = generate_pdf(report_data)
-        st.download_button(
-            "⬇️ Download PDF Report",
-            data=pdf_bytes,
-            file_name=f"SOC_Report_{inc_id}.pdf",
-            mime="application/pdf",
-        )
-    except Exception as ex:
-        st.error(f"PDF generation failed: {ex}")
-
-    # ── 8. SOC AI Chatbot ─────────────────────────────────────────────────────
-    st.markdown('<div class="sec-heading">💬 SOC AI Chat Assistant</div>', unsafe_allow_html=True)
-    st.caption("Incident-aware — answers are grounded in THIS alert's telemetry (rule, event, MITRE, IOC, related events) only.")
-
-    if chat_key not in st.session_state:
-        st.session_state[chat_key] = []
-
-    for msg in st.session_state[chat_key]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    question = st.chat_input("Ask about this incident…")
-    if question:
-        st.session_state[chat_key].append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking…"):
-                answer = _get_chatbot().ask(question, a, st.session_state[chat_key], related)
-            st.markdown(answer)
-        st.session_state[chat_key].append({"role": "assistant", "content": answer})
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            section_title(st, "SOC AI Chat Assistant")
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+            if not chatbot.available:
+                st.info(chatbot.status_message)
+            else:
+                # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+                for msg in st.session_state[chat_key]:
+                    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+                    with st.chat_message(msg["role"]):
+                        st.markdown(msg["content"])
+                question = st.chat_input("Ask about the selected incident", key=f"chat_input_{inc_id}")
+                # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+                if question:
+                    st.session_state[chat_key].append({"role": "user", "content": question})
+                    answer = chatbot.ask(question, alert, st.session_state[chat_key], related)
+                    st.session_state[chat_key].append({"role": "assistant", "content": answer})
+                    st.rerun()
 
 
-main()
+if __name__ == "__main__":
+    main()

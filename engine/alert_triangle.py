@@ -1,52 +1,65 @@
+"""Triage metadata layer that never converts severity into confirmation."""
+
+# ============================================================
+# MODULE OVERVIEW / FILE KA MAIN ROLE
+# Is file ka main kaam: Alert ke triage priority aur impact metadata ko confirmation status se independent rakhta hai.
+# Neeche ke functions/classes isi responsibility ko chhote, manageable steps me divide karte hain.
+# Presentation point: sir ko samjhate waqt is file ko isi role ke according explain kiya ja sakta hai.
+# ============================================================
+
+
+# CLASS: AlertTriangle
+# Role: Ye class ka main kaam Alert Triangle se related processing ko centrally handle karna hai.
+# Is class ke methods milkar ek focused responsibility ko handle karte hain.
 class AlertTriangle:
-    """
-    Final decision layer. Combines the detection engine's Anomaly/
-    Normal call with SeverityEngine's band to produce:
+    """Assign analyst priority and impact while preserving independent confirmation status."""
 
-        final_detection      'Normal' | 'Anomaly' | 'Confirmed Threat'
-        investigation_priority
-        business_impact
-
-    Normal events pass through untouched. Critical/High anomalies are
-    escalated to 'Confirmed Threat' since evidence-backed severity at
-    that level warrants analyst action; Medium/Low stay 'Anomaly'
-    (worth reviewing, not yet a confirmed incident).
-    """
-
+    # FUNCTION: generate
+    # Purpose: Ye function generate operation handle karta hai.
+    # Input: df.
+    # Output: Caller ko required value, status, processed data ya structured result return karta hai.
+    # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
     def generate(self, df):
+        """Add investigation priority, business impact and confirmation fields to analysed events."""
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
         if df.empty:
             return df
 
-        final, priority, impact = [], [], []
+        priorities, impacts, confirmations, triage_reasons = [], [], [], []
+        # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
         for _, row in df.iterrows():
             detection = row.get("final_detection", "Normal")
             severity = row.get("severity", "Low")
+            existing = str(row.get("confirmation_status") or "").strip()
 
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
             if detection == "Normal":
-                final.append("Normal")
-                # Not the string "None" — that reads as a real value in the UI.
-                priority.append("Not Applicable (Normal Event)")
-                impact.append("Not Applicable (Normal Event)")
+                priorities.append("Not Applicable (Normal Event)")
+                impacts.append("Not Applicable (Normal Event)")
+                confirmations.append(existing or "Not a security detection")
+                triage_reasons.append("Normal telemetry does not require incident confirmation.")
                 continue
 
+            confirmations.append(existing or "Unconfirmed")
+            # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
             if severity == "Critical":
-                final.append("Confirmed Threat")
-                priority.append("Immediate")
-                impact.append("Severe")
+                priorities.append("Immediate Review")
+                impacts.append("Potentially Severe")
+            # Yaha previous checks ke fail hone par alternate condition evaluate ki ja rahi hai.
             elif severity == "High":
-                final.append("Confirmed Threat")
-                priority.append("High Priority")
-                impact.append("Significant")
+                priorities.append("High Priority")
+                impacts.append("Potentially Significant")
+            # Yaha previous checks ke fail hone par alternate condition evaluate ki ja rahi hai.
             elif severity == "Medium":
-                final.append("Anomaly")
-                priority.append("Medium Priority")
-                impact.append("Moderate")
+                priorities.append("Medium Priority")
+                impacts.append("Potentially Moderate")
             else:
-                final.append("Anomaly")
-                priority.append("Low Priority")
-                impact.append("Minimal")
+                priorities.append("Low Priority")
+                impacts.append("Potentially Limited")
+            triage_reasons.append("Priority is based on observed evidence and risk/severity; severity alone does not confirm a threat.")
 
-        df["final_detection"] = final
-        df["investigation_priority"] = priority
-        df["business_impact"] = impact
+        df["investigation_priority"] = priorities
+        df["business_impact"] = impacts
+        df["confirmation_status"] = confirmations
+        df["triage_reason"] = triage_reasons
         return df

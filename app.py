@@ -1,198 +1,346 @@
-"""
-SOC L2 Agent — Dashboard.
+"""SOC L2 Agent - main Streamlit dashboard.
 
-Pipeline: Wazuh (Indexer alerts) -> WazuhService (normalized events) ->
-Parser -> Normalizer -> DetectionEngine -> MitreMapper -> SeverityEngine ->
-AlertTriangle.
+Dashboard responsibilities:
+1. Show the configured data source and ingestion status.
+2. Present explainable detection, severity, risk and confidence metrics.
+3. Provide stable incident selection and Investigation navigation.
+4. Keep the dashboard presentation layer separate from detection logic.
 
-Alerts are fetched from Wazuh on first load and whenever "Fetch Latest
-Alerts" is clicked in the sidebar; the analysed result is kept in
-st.session_state (see core/pipeline.py). If Wazuh is unreachable the
-dashboard still renders, with a clear "Wazuh Connection Failed" message.
+See ``CODE_MAP.md`` for professor-friendly navigation to every major module.
 """
 
-import html
+# ============================================================
+# MODULE OVERVIEW / FILE KA MAIN ROLE
+# Is file ka main kaam: Main Streamlit dashboard ko run/render karta hai aur user-facing SOC workflow ko assemble karta hai.
+# Neeche ke functions/classes isi responsibility ko chhote, manageable steps me divide karte hain.
+# Presentation point: sir ko samjhate waqt is file ko isi role ke according explain kiya ja sakta hai.
+# ============================================================
+# IMPORTS: Required libraries/modules ko yaha load kiya ja raha hai.
+# In imports ka use neeche data processing, UI, API integration ya testing me hota hai.
+from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
+from core.config import load_settings
 from core.pipeline import (
-    DEFAULT_LIMIT, DEFAULT_LOOKBACK, LOOKBACK_OPTIONS,
-    get_wazuh_status, load_pipeline, refresh_alerts, run_connection_test,
+    DEFAULT_LIMIT,
+    DEFAULT_LOOKBACK,
+    LOOKBACK_OPTIONS,
+    get_data_source_status,
+    load_pipeline,
+    refresh_data,
+    run_connection_test,
 )
-
-load_dotenv(override=True)
-
-st.set_page_config(page_title="SOC L2 Agent", page_icon="🛡️", layout="wide")
-
-CSS = """
-<style>
-:root{ --olive:olivedrab; --olive-dark:#4f6428; --brown:saddlebrown;
-       --bg:#eee8dc; --paper:#fffdf8; --dark:#2f3e2f; }
-.stApp{ background:var(--bg); }
-.header-box{ background:linear-gradient(135deg,#4f6428 0%,olivedrab 48%,saddlebrown 100%);
-       color:white; padding:26px; border-radius:16px; text-align:center; margin-bottom:20px; }
-.kpi-card{ background:var(--paper); padding:18px; border-radius:14px; text-align:center;
-       box-shadow:0 4px 12px rgba(65,50,35,.12); border-top:5px solid var(--olive); }
-.kpi-card h2{ margin:4px 0 0; font-size:30px; font-weight:800; color:var(--olive-dark); }
-.kpi-card p{ margin:0; font-size:12px; font-weight:700; color:var(--brown); letter-spacing:.03em; }
-.alert-card{ background:var(--paper); padding:16px 18px; border-radius:12px; margin-bottom:10px;
-       border-left:6px solid var(--olive); box-shadow:0 2px 8px rgba(65,50,35,.08); }
-.badge{ padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
-.sev-Critical{ background:#fde2e2; color:#a12a2a; }
-.sev-High{ background:#fde9d0; color:#a15c1c; }
-.sev-Medium{ background:#f5efce; color:#8a7a1c; }
-.sev-Low{ background:#e4efd4; color:#4f6428; }
-.sev-Normal{ background:#e9e9e9; color:#555; }
-</style>
-"""
-st.markdown(CSS, unsafe_allow_html=True)
+from core.ui import apply_theme, page_header, section_title, show_pipeline
+from core.visualization import alert_trend, detection_bar, safe_chart, severity_donut, top_techniques
 
 
-def render_header():
-    st.markdown(
-        '<div class="header-box"><h1>🛡️ SOC L2 Agent</h1>'
-        '<p>Blue Team Defence Intelligence Dashboard · SOC L2 AI Investigation Platform</p></div>',
-        unsafe_allow_html=True,
-    )
+
+# FUNCTION: _load_status
+# Purpose: Ye internal helper load status operation handle karta hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _load_status() -> dict:
+    """Return the last pipeline status or an empty status object."""
+    return get_data_source_status() or {}
 
 
-def esc(value):
-    """HTML-escape telemetry before it goes into unsafe_allow_html markup (log data is attacker-controlled)."""
-    return "" if value is None else html.escape(str(value))
-
-
-def render_wazuh_sidebar():
-    status = get_wazuh_status() or {}
+# FUNCTION: render_sidebar
+# Purpose: Ye function render sidebar operation handle karta hai.
+# Input: settings, status.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_sidebar(settings, status) -> None:
+    """Render stable navigation and source actions shared by the main dashboard."""
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
     with st.sidebar:
-        st.markdown("### 🔌 Wazuh SIEM")
+        st.markdown("## SOC L2 Agent")
+        st.caption("College demo control panel")
+        st.write(f"**Configured source:** `{settings.data_source}`")
 
-        if status.get("connected"):
-            st.success("✅ Wazuh Connected")
-            note = f"Server API {status['api_version']} · " if status.get("api_version") else ""
-            if status.get("count") is not None:
-                note += f"{status['count']} alerts fetched (last {status.get('lookback')}) · "
-            st.caption(note + f"checked {status.get('checked_at', '')}")
-        elif status:
-            st.error("❌ Wazuh Connection Failed")
-
-        if status.get("error"):
-            st.caption(f"⚠️ {status['error']}")
-        if status.get("kept_previous"):
-            st.caption("Showing the last successfully fetched alerts.")
-
-        st.number_input("Alerts to fetch", min_value=10, max_value=1000, value=DEFAULT_LIMIT,
-                        step=10, key="wazuh_limit")
-        st.selectbox("Lookback window", LOOKBACK_OPTIONS,
-                     index=LOOKBACK_OPTIONS.index(DEFAULT_LOOKBACK), key="wazuh_lookback")
-        st.button("🔄 Fetch Latest Alerts", on_click=refresh_alerts, use_container_width=True)
-        st.button("Test Connection", on_click=run_connection_test, use_container_width=True)
-
-
-def render_kpis(df):
-    total = len(df)
-    alerts_df = df[df["final_detection"] != "Normal"]
-    security_alerts = len(alerts_df)
-    counts = alerts_df["severity"].value_counts()
-
-    cols = st.columns(6)
-    kpis = [
-        ("Total Events", total),
-        ("Security Alerts", security_alerts),
-        ("Critical", int(counts.get("Critical", 0))),
-        ("High", int(counts.get("High", 0))),
-        ("Medium", int(counts.get("Medium", 0))),
-        ("Low", int(counts.get("Low", 0))),
-    ]
-    for col, (label, value) in zip(cols, kpis):
-        with col:
-            st.markdown(f'<div class="kpi-card"><h2>{value}</h2><p>{label}</p></div>', unsafe_allow_html=True)
-
-
-def render_alert_card(row, position):
-    """
-    position: the row's position within THIS render pass (from
-    enumerate() in the caller). Used as part of the widget key so it
-    is guaranteed unique even if two rows somehow share the same
-    'id' value — never rely on data content alone for a Streamlit key.
-    """
-    sev = row.get("severity", "Low")
-    with st.container():
-        st.markdown(
-            f"""<div class="alert-card">
-                <span class="badge sev-{esc(sev)}">{esc(sev)}</span>
-                &nbsp;<b>{esc(row.get('threat'))}</b>
-                &nbsp;<span style="color:#888;font-size:12px">{esc(row.get('event_time'))}</span>
-                <div style="font-size:13px;color:#555;margin-top:6px">{esc(row.get('detection_reason'))}</div>
-                </div>""",
-            unsafe_allow_html=True,
-        )
-        c1, c2 = st.columns([1, 5])
-        with c1:
-            if st.button("Investigate", key=f"inv_{position}_{row.get('id')}"):
-                st.session_state["selected_alert_id"] = str(row.get("id"))
-                st.switch_page("pages/Investigation.py")
-
-
-def main():
-    render_header()
-    df = load_pipeline()
-    render_wazuh_sidebar()
-
-    if df.empty:
-        status = get_wazuh_status() or {}
-        if status.get("connected") and not status.get("error"):
-            st.info(f"Wazuh is connected but returned no alerts for the last {status.get('lookback')}. "
-                    "Try a longer lookback window in the sidebar, then click Fetch Latest Alerts.")
+        # Wazuh-specific controls sidebar me rakhe gaye hain taaki main workspace clean aur focused rahe.
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if settings.data_source == "WAZUH":
+            st.number_input(
+                "Alerts to fetch", min_value=10, max_value=1000, value=DEFAULT_LIMIT,
+                step=10, key="wazuh_limit",
+            )
+            st.selectbox(
+                "Lookback window", LOOKBACK_OPTIONS,
+                index=LOOKBACK_OPTIONS.index(DEFAULT_LOOKBACK), key="wazuh_lookback",
+            )
+        # Yaha previous checks ke fail hone par alternate condition evaluate ki ja rahi hai.
+        elif settings.data_source == "MOCK":
+            st.success("MOCK / DEMO DATA", icon="✅")
         else:
-            st.error("No alerts loaded — Wazuh connection failed. See the sidebar for details and "
-                     "check the WAZUH_* settings in your .env file.")
+            st.info("SPLUNK / LIVE SOURCE", icon="🔌")
+
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if status.get("connected"):
+            st.success(status.get("message", "Ready"), icon="✅")
+        # Yaha previous checks ke fail hone par alternate condition evaluate ki ja rahi hai.
+        elif status.get("message") not in {None, "Not checked"}:
+            st.warning(status.get("message", "Unavailable"), icon="⚠️")
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if status.get("error"):
+            st.caption(f"Reason: {status['error']}")
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if status.get("kept_previous"):
+            st.caption("Previous verified dataset remains visible.")
+
+        st.divider()
+        st.markdown("### Actions")
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if st.button("Refresh & Ingest", use_container_width=True, type="primary", key="sidebar_refresh"):
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with st.spinner("Running the SOC ingestion pipeline..."):
+                refresh_data()
+            st.rerun()
+
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if st.button("Test Connection", use_container_width=True, key="sidebar_test_connection"):
+            # Resource/context ko safely open karke operation complete kiya ja raha hai.
+            with st.spinner("Testing the configured source..."):
+                run_connection_test()
+            st.rerun()
+
+        st.divider()
+        st.markdown("### Navigation")
+        st.page_link("app.py", label="Dashboard", icon="📊")
+        st.page_link("pages/Ingestion.py", label="Ingestion Center", icon="📥")
+        st.page_link("pages/Investigation.py", label="Investigation", icon="🔎")
+
+
+# FUNCTION: render_status_strip
+# Purpose: Ye function render status strip operation handle karta hai.
+# Input: settings, df, status.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_status_strip(settings, df, status) -> None:
+    """Show the source, event count and latest state in one compact status row."""
+    cols = st.columns(3)
+    cols[0].metric("Data Source", settings.data_source)
+    cols[1].metric("Loaded Events", len(df))
+    cols[2].metric("Pipeline Status", status.get("message", "Ready"))
+
+
+# FUNCTION: render_kpis
+# Purpose: Ye function render kpis operation handle karta hai.
+# Input: df.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_kpis(df) -> None:
+    """Render detection counts with a compact two-row layout that is easier on phones."""
+    total = len(df)
+    detections = df[df["final_detection"] != "Normal"] if "final_detection" in df.columns else df.iloc[0:0]
+    severity = detections["severity"].value_counts() if "severity" in detections.columns else pd.Series(dtype="int64")
+    values = [
+        ("Total Events", total),
+        ("Detections", len(detections)),
+        ("Critical", int(severity.get("Critical", 0))),
+        ("High", int(severity.get("High", 0))),
+        ("Medium", int(severity.get("Medium", 0))),
+        ("Low", int(severity.get("Low", 0))),
+    ]
+    st.markdown("### Detection Summary")
+    first = st.columns(3)
+    second = st.columns(3)
+    # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+    for col, (label, val) in zip(first, values[:3]):
+        col.metric(label, val)
+    # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+    for col, (label, val) in zip(second, values[3:]):
+        col.metric(label, val)
+
+
+# FUNCTION: render_overview_charts
+# Purpose: Ye function render overview charts operation handle karta hai.
+# Input: df.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_overview_charts(df) -> None:
+    """Render the four explainable charts with stable sizes and readable labels."""
+    section_title(st, "Security Overview", "Visual summary of the currently loaded telemetry.")
+    c1, c2 = st.columns(2)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with c1:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            safe_chart(severity_donut(df), st, height=300, key="severity_donut_chart")
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with c2:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            safe_chart(detection_bar(df), st, height=300, key="detection_bar_chart")
+    c3, c4 = st.columns(2)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with c3:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            safe_chart(top_techniques(df), st, height=300, key="mitre_chart")
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with c4:
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            safe_chart(alert_trend(df), st, height=300, key="trend_chart")
+
+
+# FUNCTION: _alert_label
+# Purpose: Ye internal helper ka main kaam alert label se related processing ko centrally handle karna hai.
+# Input: row.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def _alert_label(row) -> str:
+    """Build a compact incident selector label without creating many dynamic buttons."""
+    ident = str(row.get("id") or "unknown")
+    threat = str(row.get("threat") or "Unclassified Event")[:64]
+    sev = str(row.get("severity") or "Normal")
+    return f"{ident}  •  {sev}  •  {threat}"
+
+
+# FUNCTION: render_alert_queue
+# Purpose: Ye function render alert queue operation handle karta hai.
+# Input: df.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_alert_queue(df) -> None:
+    """Render searchable incidents and a single stable Investigation action."""
+    section_title(st, "Alert Queue", "Select one incident to inspect the full evidence and investigation workflow.")
+    alerts = df[df["final_detection"] != "Normal"].copy() if "final_detection" in df.columns else df.iloc[0:0].copy()
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if alerts.empty:
+        st.success("No security detections are present in the loaded telemetry.")
+        return
+
+    f1, f2 = st.columns([2, 1])
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with f1:
+        search = st.text_input(
+            "Search incidents", placeholder="Threat, IP, host, rule ID, command...", key="alert_search",
+        )
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with f2:
+        sev = st.selectbox("Severity", ["All", "Critical", "High", "Medium", "Low"], key="alert_severity_filter")
+
+    view = alerts
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if search.strip():
+        needle = search.strip().lower()
+        mask = view.astype(str).apply(lambda col: col.str.lower().str.contains(needle, regex=False, na=False)).any(axis=1)
+        view = view[mask]
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if sev != "All":
+        view = view[view["severity"] == sev]
+
+    st.caption(f"Showing {len(view)} of {len(alerts)} detections.")
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if view.empty:
+        st.info("No incidents match the current filters.")
+        return
+
+    # Stable selectbox + action button use kiye gaye hain taaki filtering ke baad per-row buttons fragile na ho.
+    choice_map = {str(row["id"]): row for _, row in view.head(100).iterrows()}
+    ids = list(choice_map)
+    previous = str(st.session_state.get("selected_alert_id", ""))
+    default_index = ids.index(previous) if previous in ids else 0
+    selected_id = st.selectbox(
+        "Selected incident", ids, index=default_index,
+        format_func=lambda item: _alert_label(choice_map[item]), key="alert_selector",
+    )
+    row = choice_map[selected_id]
+    st.session_state["selected_alert_id"] = str(selected_id)
+
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with st.container(border=True):
+        detail = pd.DataFrame(
+            [
+                ["Threat", row.get("threat")],
+                ["Severity", row.get("severity")],
+                ["Risk", f"{row.get('risk_score', 'NA')}/10"],
+                ["Confidence", row.get("confidence_level")],
+                ["Confirmation", row.get("confirmation_status")],
+                ["Host", row.get("hostname")],
+                ["Source IP", row.get("source_ip")],
+                ["MITRE", row.get("mapped_technique")],
+            ],
+            columns=["Field", "Value"],
+        )
+        st.dataframe(detail, use_container_width=True, hide_index=True, height=315)
+        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+        if st.button(
+            "Open Investigation",
+            type="primary",
+            use_container_width=True,
+            key="open_investigation",
+        ):
+            st.switch_page("pages/Investigation.py")
+
+    table_cols = [
+        c for c in [
+            "id", "timestamp", "source", "hostname", "source_ip", "destination_ip", "rule_id",
+            "severity", "risk_score", "confidence_level", "confirmation_status", "mapped_technique",
+        ] if c in view.columns
+    ]
+    st.dataframe(view[table_cols].head(60), use_container_width=True, hide_index=True, height=420)
+
+
+# FUNCTION: render_all_telemetry
+# Purpose: Ye function render all telemetry operation handle karta hai.
+# Input: df.
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def render_all_telemetry(df) -> None:
+    """Render normalized telemetry with only the columns useful during a demo."""
+    section_title(st, "Telemetry Explorer", "This is the normalized event contract used by downstream SOC stages.")
+    cols = [
+        c for c in [
+            "id", "timestamp", "source", "hostname", "agent_ip", "source_ip", "destination_ip",
+            "username", "event_type", "rule_id", "rule_level", "rule_groups", "threat", "final_detection",
+            "severity", "risk_score", "confidence_level", "confirmation_status", "mapped_technique",
+        ] if c in df.columns
+    ]
+    st.dataframe(df[cols], use_container_width=True, hide_index=True, height=560)
+
+
+# FUNCTION: main
+# Purpose: Ye function ka main kaam main se related processing ko centrally handle karna hai.
+# Input: Koi direct input parameter nahi; object/state ya module-level configuration use ho sakti hai..
+# Output: Caller ko required value, status, processed data ya structured result return karta hai.
+# Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
+def main() -> None:
+    """Assemble the dashboard from source status, KPIs, charts and the alert workflow."""
+    st.set_page_config(page_title="SOC L2 Agent", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
+    apply_theme(st)
+
+    settings = load_settings()
+    df = load_pipeline()
+    status = _load_status()
+    page_header(st, "SOC L2 Agent", "Detection • Triage • MITRE Enrichment • Investigation")
+    render_sidebar(settings, status)
+    render_status_strip(settings, df, status)
+    show_pipeline(st)
+
+    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+    if df.empty:
+        st.warning("No telemetry is loaded. Open Ingestion Center and run the configured source, or use MOCK mode for the demo.")
         return
 
     render_kpis(df)
-
-    tab_alerts, tab_all = st.tabs(["🚨 Alert Queue", "📋 All Telemetry"])
-
-    with tab_alerts:
-        alerts_df = df[df["final_detection"] != "Normal"].reset_index(drop=True)
-
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            search = st.text_input("🔍 Search threat, IP, host, rule ID, URI…", "")
-        with c2:
-            sev_filter = st.selectbox("Severity", ["All", "Critical", "High", "Medium", "Low"])
-
-        view = alerts_df
-        if search:
-            s = search.lower()
-            mask = view.apply(
-                lambda r: s in str(r.get("threat", "")).lower()
-                or s in str(r.get("source_ip", "")).lower()
-                or s in str(r.get("hostname", "")).lower()
-                or s in str(r.get("url", "")).lower()
-                or s in str(r.get("rule_id", "")).lower(),
-                axis=1,
-            )
-            view = view[mask]
-        if sev_filter != "All":
-            view = view[view["severity"] == sev_filter]
-
-        st.caption(f"Showing {len(view)} of {len(alerts_df)} security alerts ({total_events_note(df)}).")
-        for position, (_, row) in enumerate(view.iterrows()):
-            render_alert_card(row, position)
-
-    with tab_all:
-        st.caption(f"Full source dataset — {len(df)} total events, including Normal telemetry.")
-        display_cols = [c for c in [
-            "id", "event_time", "hostname", "source_ip", "username", "rule_id", "rule_level",
-            "http_method", "http_status", "uri_path", "url", "threat", "mapped_technique",
-            "severity", "risk_score", "final_detection",
-        ] if c in df.columns]
-        st.dataframe(df[display_cols], use_container_width=True, height=500)
-
-
-def total_events_note(df):
-    return f"{len(df)} total events in source dataset"
+    tabs = st.tabs(["Overview", "Alerts", "Telemetry"])
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[0]:
+        render_overview_charts(df)
+        # Resource/context ko safely open karke operation complete kiya ja raha hai.
+        with st.container(border=True):
+            st.markdown("**Demo path:** Overview → Alerts → select an incident → Open Investigation → Evidence → PDF / optional AI")
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[1]:
+        render_alert_queue(df)
+    # Resource/context ko safely open karke operation complete kiya ja raha hai.
+    with tabs[2]:
+        render_all_telemetry(df)
 
 
 if __name__ == "__main__":
