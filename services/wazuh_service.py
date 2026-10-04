@@ -27,6 +27,7 @@ Security notes:
     is None in the normalized event.
 """
 
+import json
 import os
 import re
 import time
@@ -170,6 +171,8 @@ def normalize_wazuh_alert(hit):
     rule = alert.get("rule") if isinstance(alert.get("rule"), dict) else {}
     agent = alert.get("agent") if isinstance(alert.get("agent"), dict) else {}
     mitre = rule.get("mitre") if isinstance(rule.get("mitre"), dict) else {}
+    if not mitre and isinstance(alert.get("mitre"), dict):  # top-level mitre (sample file)
+        mitre = alert["mitre"]
 
     level = _to_int(rule.get("level"))
     groups = _as_list(rule.get("groups"))
@@ -398,6 +401,43 @@ class WazuhService:
         except ValueError:
             return None
 
+    # ---- File mode (offline alerts file, no Wazuh server needed) ----------
+
+    @staticmethod
+    def file_mode():
+        return os.getenv("WAZUH_SOURCE", "api").strip().lower() == "file"
+
+    @staticmethod
+    def events_path():
+        return os.getenv("WAZUH_EVENTS_FILE", "data/wazuh_events.json")
+
+    def load_file_events(self, limit=100):
+        path = self.events_path()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read().strip()
+        except OSError:
+            raise WazuhError(f"Events file not found or unreadable: {path}") from None
+
+        records = []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                parsed = parsed.get("hits", {}).get("hits", [parsed]) if "hits" in parsed else [parsed]
+            records = [r for r in parsed if isinstance(r, dict)]
+        except json.JSONDecodeError:  # JSONL: one alert per line
+            for line in text.splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        events = [normalize_wazuh_alert(r) for r in records]
+        events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+        return events[: max(1, min(int(limit), 1000))]
+
     # ---- Public operations ----------------------------------------------
 
     def test_connection(self):
@@ -410,6 +450,11 @@ class WazuhService:
         """
         result = {"connected": False, "api_ok": False, "indexer_ok": False,
                   "api_version": None, "message": "", "details": []}
+        if self.file_mode():
+            result.update(connected=True, api_ok=True, indexer_ok=True,
+                          message="Wazuh Connected (file mode)",
+                          details=[f"File mode: reading {self.events_path()}"])
+            return result
         try:
             info = self.get_api_info()
             result["api_ok"] = True
@@ -435,6 +480,8 @@ class WazuhService:
         Fetch real alerts from the Indexer (newest first) and return them as
         normalized events. Raises WazuhError on any failure.
         """
+        if self.file_mode():
+            return self.load_file_events(limit)
         self._require_config()
         limit = max(1, min(int(limit), 1000))
         if not _LOOKBACK_RE.match(str(lookback)):
