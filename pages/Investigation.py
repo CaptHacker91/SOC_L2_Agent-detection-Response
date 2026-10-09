@@ -378,36 +378,7 @@ def _render_ai(alert: dict, related: list, case: dict, inc_id: str) -> None:
             st.session_state[chat_key].append({"role": "assistant", "content": answer})
             record_audit("AI_CHAT_MESSAGE", incident_id=inc_id, case_id=case.get("case_id", ""), detail="Incident chat message recorded.")
             st.rerun()
-    with st.container(border=True):
-        section_title(st, "Incident Report & Evidence Package", "Exports use persisted analyst case state and redaction-safe report generation.")
-        report_data = build_report_data(alert, st.session_state.get(report_key) or "AI analysis not generated.", related=related, case=case, analyst_decision=str(case.get("decision") or "Not recorded"), analyst_note=str(case.get("note") or "Not recorded"), assigned_analyst=str(case.get("assigned_analyst") or "Unassigned"))
-        report_data["case_history"] = case_history(case["case_id"], 100)
-        report_data["audit_history"] = audit_events(100, incident_id=inc_id)
-        try:
-            pdf_bytes = generate_pdf(report_data)
-            package_bytes = build_incident_package(report_data)
-            safe_id = re.sub(r"[^A-Za-z0-9._-]+", "_", str(case.get("case_id", inc_id))).strip("._-") or "incident"
-            c1, c2 = st.columns(2)
-            with c1:
-                st.download_button("Download Incident PDF", data=pdf_bytes, file_name=f"SOC_Report_{safe_id}.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_download_{inc_id}")
-            with c2:
-                st.download_button("Generate Incident Package", data=package_bytes, file_name=f"SOC_Package_{safe_id}.zip", mime="application/zip", use_container_width=True, key=f"pkg_download_{inc_id}")
-        except Exception as exc:
-            st.error(f"Report generation failed safely: {type(exc).__name__}.")
-    with st.container(border=True):
-        section_title(st, "Incident Chat", "Ask grounded questions about this incident. Responses are advisory and bounded by supplied context.")
-        if not chatbot.available:
-            st.info(chatbot.status_message)
-        else:
-            for msg in st.session_state[chat_key]:
-                with st.chat_message(msg["role"]): st.markdown(msg["content"])
-            question = st.chat_input("Ask about this incident", key=f"chat_input_{inc_id}")
-            if question:
-                st.session_state[chat_key].append({"role": "user", "content": question})
-                answer = chatbot.ask(question, alert, st.session_state[chat_key], related)
-                st.session_state[chat_key].append({"role": "assistant", "content": answer})
-                record_audit("AI_CHAT_MESSAGE", incident_id=inc_id, case_id=case.get("case_id", ""), detail="Incident chat message recorded.")
-                st.rerun()
+
 
 
 def main() -> None:

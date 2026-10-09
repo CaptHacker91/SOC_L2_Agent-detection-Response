@@ -13,7 +13,7 @@ from core.telemetry_quality import data_quality_summary
 from core.ui import alert_feed_html, apply_theme, command_matrix, command_palette, data_quality_cards, footer, metric_card, mini_field, nav_brand, navigation_links, operational_strip, page_header, progress_bar, render_kv_cards, section_title, show_pipeline, sort_alerts_newest_first, status_badge, terminal_box
 from core.visualization import alert_trend, confidence_breakdown, detection_bar, event_category_bar, mitre_tactic_bar, risk_confidence_scatter, risk_distribution, safe_chart, severity_donut, source_distribution, top_techniques
 from services.case_store import audit_events, case_metrics, list_cases
-from services.chatbot_service import ChatbotService
+from services.chatbot_service import ChatbotService, answer_dataset_question
 
 
 def _status_tone(status: dict) -> str:
@@ -222,7 +222,12 @@ def render_ai_soc_assistant(df: pd.DataFrame, settings) -> None:
                 st.warning("Choose a quick question or enter a custom question.")
             else:
                 with st.spinner("$ soc_ai --grounded-current-telemetry ..."):
-                    answer = service.ask_dataset(question, df, cases)
+                    ask_dataset = getattr(service, "ask_dataset", None)
+                    if callable(ask_dataset):
+                        answer = ask_dataset(question, df, cases)
+                    else:
+                        st.warning("ChatbotService code is stale in this running process; using local grounded mode. Stop and restart Streamlit to load the updated service.")
+                        answer = answer_dataset_question(question, df, cases)
                 st.session_state["dashboard_ai_last_answer"] = answer
                 st.session_state["dashboard_ai_last_question"] = question
         if st.session_state.get("dashboard_ai_last_answer"):
