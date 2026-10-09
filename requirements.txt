@@ -1,4 +1,4 @@
-    # Core runtime - Python 3.13 compatible
+# Core runtime - Python 3.13 compatible
 pandas>=2.2,<4
 requests>=2.32,<3
 python-dotenv>=1.0,<2
@@ -8,3 +8,6 @@ fpdf2>=2.8,<3
 
 # Optional AI integration (the app still runs without an API key)
 groq>=0.13,<1
+
+# Test tooling
+pytest>=8,<10

@@ -1,7 +1,6 @@
-# SOC L2 Agent - Code Map
+# SOC L2 Agent — Code Map
 
-Use this file during the college viva to locate every major part of the project quickly.
-The project keeps **presentation**, **pipeline**, **detection**, **integration**, and **reporting** code separate so the flow is easy to explain.
+Use this file during the college viva to locate each major implementation area quickly.
 
 ## 1. End-to-End Flow
 
@@ -12,15 +11,25 @@ MOCK / WAZUH / SPLUNK
         |
     Normalizer
         |
-    Detection
+ Data Quality / Fingerprint
+        |
+    Detection Engine
         |
 Severity / Risk / Confidence
         |
+ Correlation / Clustering
+        |
       MITRE
         |
-  Investigation
-     /       \
-  Groq AI     PDF
+ Investigation / Evidence
+        |
+ Optional AI Assistance
+        |
+ Human Analyst Decision
+        |
+ Case Store / Audit
+        |
+ Report / Evidence Package
 ```
 
 ## 2. Professor Viva Map
@@ -30,48 +39,61 @@ Severity / Risk / Confidence
 | Where does data come from? | `core/data_source.py` | `get_data_source()` |
 | Where is configuration loaded? | `core/config.py` | `load_settings()` |
 | Where is JSON / JSONL loaded? | `core/file_loader.py` | `FileLoader.load()` |
-| Where is event type detected? | `core/parser.py` | `DetectionParser._categorize()` |
-| Where is Wazuh recognized structurally? | `services/wazuh_service.py` | `looks_like_wazuh_event()` |
-| Where is Wazuh data extracted? | `services/wazuh_service.py` | `normalize_wazuh_alert()` |
+| Where is event type detected? | `core/parser.py` | `DetectionParser` |
 | Where is common normalization done? | `core/normalizer.py` | `DataNormalizer.normalize()` |
+| Where are quality/fingerprint fields added? | `core/telemetry_quality.py` | `enrich_dataframe()` |
 | Where is the pure processing pipeline? | `core/analysis.py` | `analyze_events()` |
-| Where is Streamlit orchestration/state handled? | `core/pipeline.py` | `refresh_data()` / `load_pipeline()` |
+| Where is source/session orchestration handled? | `core/pipeline.py` | `refresh_data()` / `get_wazuh_controls()` |
 | Where are detection rules applied? | `engine/detection_engine.py` | `DetectionEngine.analyze()` |
 | Where are rules configured? | `rules/detection_rules.json` | JSON rule definitions |
 | Where are severity/risk/confidence calculated? | `engine/severity_engine.py` | `SeverityEngine.calculate()` |
-| Where is confirmation separated from severity? | `engine/alert_triangle.py` | `AlertTriangle.generate()` |
+| Where is confirmation separated? | `engine/alert_triangle.py` | `AlertTriangle.generate()` |
 | Where is MITRE mapping done? | `engine/mitre_mapper.py` | `MitreMapper.map()` |
-| Where are related events found? | `services/incident_context.py` | `find_related_events()` |
+| Where are related events/correlation found? | `services/incident_context.py` | `find_related_events()` |
+| Where is persistent case state stored? | `services/case_store.py` | `get_or_create_case()` / `update_case()` |
 | Where is the Investigation UI? | `pages/Investigation.py` | `main()` |
+| Where is centralized analytics? | `pages/Analytics.py` | `main()` |
+| Where is MITRE center? | `pages/MITRE_Center.py` | `main()` |
+| Where is IOC extraction/relationship view? | `pages/IOC_Intelligence.py` | `main()` |
+| Where are reports centralized? | `pages/Reports.py` | `main()` |
+| Where is persistent audit history? | `pages/Audit_Log.py` | `main()` |
+| Where are safe environment diagnostics? | `pages/Settings.py` | `main()` |
+| Where is detection rule replay? | `pages/Detection_Engineering.py` | `main()` |
 | Where is Groq AI analysis? | `services/llm_service.py` | `LLMService.investigate()` |
-| Where is the Groq chatbot? | `services/chatbot_service.py` | `ChatbotService.ask()` |
+| Where is the incident chatbot? | `services/chatbot_service.py` | `ChatbotService.ask()` |
 | Where is PDF generation? | `services/report_service.py` | `generate_pdf()` |
+| Where is the portable incident package? | `services/report_service.py` | `build_incident_package()` |
 | Where are secrets redacted? | `core/security.py` | `redact_object()` / `safe_json()` |
-| Where is Wazuh connection/fetch handled? | `services/wazuh_service.py` | `test_connection()` / `fetch_alerts()` |
-| Where is Splunk connection/search handled? | `core/splunk_loader.py` | `test_connection()` / `load()` |
-| Where is dashboard UI? | `app.py` | `main()` |
-| Where is shared UI styling/navigation? | `core/ui.py` | `apply_theme()` / `page_header()` |
-| Where are dashboard charts? | `core/visualization.py` | `severity_donut()` / `detection_bar()` / `top_techniques()` / `alert_trend()` |
-| Where is the ingestion screen? | `pages/Ingestion.py` | `main()` |
-| Where are automated tests? | `tests/` | unit tests + `smoke_test.py` |
+| Where is Wazuh API/Indexer handling? | `services/wazuh_service.py` | `test_connection()` / `fetch_alerts()` |
+| Where is Splunk handling? | `core/splunk_loader.py` | `test_connection()` / `load()` |
+| Where is the dashboard? | `app.py` | `main()` |
+| Where is shared visual styling? | `core/ui.py` | `apply_theme()` / navigation helpers |
+| Where are charts? | `core/visualization.py` | chart helper functions |
+| Where are tests? | `tests/` | unit/integration/static tests |
 
-## 3. UI Navigation
+## 3. Navigation
 
-- `app.py` — dashboard, overview charts, alert filters and incident selection.
-- `pages/Ingestion.py` — source status, connection test, ingestion and preview.
-- `pages/Investigation.py` — incident evidence, MITRE, related events, recommendations, AI, PDF and chat.
-- `core/ui.py` — shared professional theme and layout helpers.
-- `.streamlit/config.toml` — light theme and safe local Streamlit settings.
+- `app.py` — Dashboard / alert queue / telemetry explorer.
+- `pages/Ingestion.py` — Source health, Wazuh controls, reconciliation and data quality.
+- `pages/Investigation.py` — Evidence, explainability, correlation, case management, AI, report and history.
+- `pages/Analytics.py` — Risk, confidence, severity, trend, tactic and rule coverage analytics.
+- `pages/MITRE_Center.py` — Technique/tactic mapping and unmapped queue.
+- `pages/IOC_Intelligence.py` — IOC inventory from observed telemetry only.
+- `pages/Reports.py` — Persistent cases and report/evidence-package export.
+- `pages/Audit_Log.py` — Persistent analyst activity history.
+- `pages/Settings.py` — Safe provider/runtime diagnostics.
+- `pages/Detection_Engineering.py` — Rule coverage and controlled replay.
 
-## 4. Why the UI Uses Native Containers
+## 4. Trust / Security Boundaries
 
-Earlier versions mixed raw HTML `<div>` tags with native Streamlit components. That can create malformed DOM/layout behavior and visual overlays after reruns or on smaller screens.
-The current build uses `st.container(border=True)` for section cards and keeps custom HTML limited to the CSS/style layer.
+- MOCK is explicitly labeled as deterministic demo telemetry.
+- Wazuh/Splunk connectivity is never fabricated.
+- Missing fields remain `Not available in supplied telemetry`.
+- Correlation is time-bounded and displays its reason/confidence.
+- Detection, severity, risk and confidence do not equal confirmation.
+- AI is optional, evidence-grounded and advisory.
+- Analyst decision is stored separately from automated detection.
+- Secrets are excluded from rendered settings and redacted on export.
+- SQLite state is local prototype persistence, not an enterprise SIEM audit replacement.
 
-## 5. Evidence and Trust Rules
-
-- MOCK is always labelled as demo data.
-- Real Wazuh/Splunk connectivity is never faked.
-- Missing telemetry is displayed as `Not available in supplied telemetry`.
-- High/Critical severity does not automatically mean confirmed compromise.
-- AI output is advisory only and grounded in the selected incident context.
+- Dataset-grounded global AI SOC Assistant: `services/chatbot_service.py` (local deterministic fallback + optional Groq layer).

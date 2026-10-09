@@ -6,23 +6,43 @@ RECOMMENDED COLLEGE DEMO
 Open PowerShell in this folder and run:
     .\RUN_DEMO.bat
 
-The launcher creates/uses .venv, installs requirements, creates .env when needed,
+The launcher creates/uses .venv, checks the required packages (installing only when needed), creates .env when needed,
 and starts Streamlit in local MOCK mode without requiring Wazuh, Splunk or Groq.
 
-MANUAL RUN
-----------
+MANUAL RUN (PowerShell)
+--------------------
     py -3.13 -m venv .venv
-    .venv\Scripts\activate
+    .\.venv\Scripts\Activate.ps1
     python -m pip install -r requirements.txt
     Copy-Item .env.example .env
+    python -m unittest discover -s tests -p "test_*.py"
+    python scripts/final_validation.py
+    python -m compileall -q .
+    python -m streamlit run app.py
+
+MANUAL RUN (Command Prompt)
+---------------------------
+    py -3.13 -m venv .venv
+    call .venv\Scripts\activate.bat
+    python -m pip install -r requirements.txt
+    copy .env.example .env
+    python -m unittest discover -s tests -p "test_*.py"
+    python scripts/final_validation.py
+    python -m compileall -q .
     python -m streamlit run app.py
 
 MAIN SCREENS
 ------------
-Dashboard       -> app.py
-Ingestion       -> pages/Ingestion.py
-Investigation   -> pages/Investigation.py
-Charts          -> core/visualization.py
+Dashboard           -> app.py
+Ingestion Center    -> pages/Ingestion.py
+Investigation       -> pages/Investigation.py
+Analytics           -> pages/Analytics.py
+Detection Engineering -> pages/Detection_Engineering.py
+MITRE Center        -> pages/MITRE_Center.py
+IOC Intelligence    -> pages/IOC_Intelligence.py
+Reports Center      -> pages/Reports.py
+Audit Log           -> pages/Audit_Log.py
+Settings            -> pages/Settings.py
 
 PHONE DEMO
 ----------
@@ -44,7 +64,13 @@ VIVA CODE NAVIGATION
 --------------------
 See CODE_MAP.md.
 
-IMPORTANT
----------
+MASTER BUILD HIGHLIGHTS
+----------------------
+Persistent cases + history, analyst assignment/decision workflow, evidence provenance,
+rule explainability, data-quality scoring, Wazuh fetch controls, bounded correlation,
+MITRE/IOC/Analytics/Reports/Audit centers, structured optional AI assistance,
+CSV/JSON/PDF/incident-package exports, runtime diagnostics and regression validation.
+
 The project never treats MOCK data as a live source, never fabricates a successful
 Wazuh/Splunk connection, and keeps severity/risk/confidence separate from confirmation.
+AI remains advisory; autonomous response is disabled.

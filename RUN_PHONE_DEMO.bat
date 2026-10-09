@@ -23,10 +23,20 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 call ".venv\Scripts\activate.bat"
-python -m pip install --upgrade pip
-if errorlevel 1 goto :fail
-python -m pip install -r requirements.txt
-if errorlevel 1 goto :fail
+python -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,13) else 1)" >nul 2>nul
+if errorlevel 1 (
+    echo Existing .venv is not Python 3.13. Delete .venv and run this launcher again.
+    pause
+    exit /b 1
+)
+python -c "import pandas, requests, dotenv, streamlit, plotly, fpdf" >nul 2>nul
+if errorlevel 1 (
+    echo Required packages are missing. Installing from requirements.txt...
+    python -m pip install -r requirements.txt
+    if errorlevel 1 goto :fail
+) else (
+    echo Required packages are already installed; skipping network installation.
+)
 
 if not exist ".env" copy /y ".env.example" ".env" >nul
 
