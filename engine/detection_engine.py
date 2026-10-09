@@ -134,17 +134,14 @@ class DetectionEngine:
         """Classify structurally recognized Wazuh alerts using rule metadata and source evidence."""
         level = self._to_int(row.get("rule_level"))
         rule_id = row.get("rule_id") or "not supplied"
-        description = str(row.get("description") or "Wazuh alert (no rule description supplied)").strip()
+        description = str(row.get("description") or "Wazuh alert (no rule description supplied)").strip().rstrip(".")
         groups = row.get("rule_groups") or "not supplied"
         has_mitre = bool(row.get("mitre_technique"))
-        informational = level is not None and level <= self.WAZUH_INFORMATIONAL_MAX_LEVEL and not has_mitre
+        informational = level is not None and level <= self.WAZUH_INFORMATIONAL_MAX_LEVEL
         status = "Normal" if informational else "Anomaly"
         reason = f"Wazuh rule {rule_id} fired"
         reason += f" at level {level}/15" if level is not None else " (level not supplied)"
         reason += f": {description}. Groups: {groups}."
-        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
-        if has_mitre:
-            reason += " MITRE information was supplied by the event source."
         return (
             description,
             reason,
@@ -176,11 +173,11 @@ class DetectionEngine:
             )
         return (
             threat,
-            "The record contains a threat label but no configured rule/signature match was established.",
+            "The record contains a supplied threat label, but no configured rule/signature match was established; it is retained as low-baseline anomaly evidence for analyst review.",
             str(row.get("rule_type") or "Unmatched"),
             str(row.get("tool") or "Detection Engine"),
             "Anomaly",
-            "Threat label is present in supplied telemetry; independent confirmation is unavailable.",
+            "Supplied threat/signature context is present, but compromise is not independently confirmed.",
         )
 
     # FUNCTION: _classify_web

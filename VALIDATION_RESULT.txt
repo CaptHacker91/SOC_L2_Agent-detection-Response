@@ -1,0 +1,53 @@
+FINAL VALIDATION RESULT
+=======================
+
+Release: SOC_L2_Agent_FINAL_MASTER_120X_6X_UI_MOTION_FINAL (revalidated/fixed)
+Python used for validation: 3.13.5
+
+Automated tests:
+- pytest: 68 passed
+- unittest discover: 66 passed
+- compileall: PASS
+
+Pipeline data validation:
+- MOCK/Wazuh-shaped dataset: 1000 loaded -> 1000 analysed
+- Parser errors: 0
+- Normalizer errors: 0
+- Missing core fields: 0
+- Duplicate events: 0
+- Valid IDs: 1000/1000
+- Valid timestamps: 1000/1000
+
+- Splunk sample dataset: 500 loaded -> 500 analysed
+- Parser errors: 0
+- Normalizer errors: 0
+- Valid IDs: 500/500
+- Valid timestamps: 500/500
+- Note: the bundled Splunk sample does not populate the project's full required-core-field contract, so its missing-core diagnostic is expected for that sample; this is not a parser/normalizer failure.
+
+- Blue Team dataset: 350 loaded -> 350 analysed
+- Parser errors: 0
+- Normalizer errors: 0
+- Valid IDs: 350/350
+- Timestamp completeness: 0/350 in the supplied dataset
+- This reflects source-data completeness, not a parser/normalizer crash.
+
+Fix applied in this release:
+- Ingestion reconciliation now always reports successful FETCHED/PARSED/NORMALIZED/ANALYZED counts for MOCK, Wazuh and Splunk pipeline runs.
+- None values are no longer displayed as successful-stage counts in the Ingestion Center.
+- Parser and normalizer diagnostic counts are explicitly stored in source status.
+- Added regression coverage for reconciliation and local grounded AI assistant behavior.
+
+AI validation:
+- Local grounded assistant works without GROQ_API_KEY.
+- Answers are derived from the currently loaded telemetry and preserve analyst-control boundaries.
+
+Data integrity:
+- Wazuh-shaped dataset SHA-256 unchanged from prior release.
+- Splunk sample SHA-256 unchanged from prior release.
+- Blue Team dataset SHA-256 unchanged from prior release.
+- Detection rules SHA-256 unchanged from prior release.
+
+Runtime/browser note:
+- Full browser deployment could not be launched inside this validation container because Streamlit is not installed here and outbound package installation is unavailable.
+- The package declares Streamlit in requirements.txt and the application passed Python compile/tests and direct pipeline execution checks.

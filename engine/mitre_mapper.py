@@ -103,7 +103,7 @@ class MitreMapper:
         if threat in self.MAPPING:
             mapping = self.MAPPING[threat]
             return mapping + ("Built-in explicit mapping",)
-        return self.UNMAPPED, self.UNMAPPED, self.UNMAPPED, "None"
+        return self.UNMAPPED, self.UNMAPPED, self.UNMAPPED, self.UNMAPPED
 
     @classmethod
     # FUNCTION: _valid_ids

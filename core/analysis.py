@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from core.normalizer import DataNormalizer
+from core.telemetry_quality import enrich_dataframe
 from core.parser import DetectionParser
 from engine.alert_triangle import AlertTriangle
 from engine.detection_engine import DetectionEngine
@@ -51,4 +52,5 @@ def analyze_events(
     df = MitreMapper(rules_path=rules_path).map(df)
     df = SeverityEngine(rules_path=rules_path).calculate(df)
     df = AlertTriangle().generate(df)
+    df = enrich_dataframe(df, rules_path=rules_path)
     return df

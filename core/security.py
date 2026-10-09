@@ -18,9 +18,21 @@ from typing import Any
 _SECRET_PATTERNS = [
     (re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"), r"\1[REDACTED]"),
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)\b\s*[:=]\s*[\"']?)[^\s,;\"']+"), r"\1[REDACTED]"),
 ]
-_SENSITIVE_KEYS = {"password", "passwd", "secret", "api_key", "apikey", "access_token", "auth_token", "token", "authorization"}
+_SENSITIVE_VALUE_KEYS = (
+    "api[_-]?key", "x-api-key", "apikey", "access[_-]?token", "auth[_-]?token",
+    "password", "passwd", "secret", "client[_-]?secret", "private[_-]?key",
+    "session[_-]?token", "refresh[_-]?token", "token", "authorization",
+    "cookie", "set[_-]?cookie", "jsessionid", "sessionid",
+)
+_SECRET_KEY_VALUE_RE = re.compile(
+    r"(?i)(\b(?:" + "|".join(_SENSITIVE_VALUE_KEYS) + r")\b\s*[:=]\s*)(?:\"([^\"]*)\"|'([^']*)'|([^\s,;&\"'}\]]+))"
+)
+_SENSITIVE_KEYS = {
+    "password", "passwd", "secret", "api_key", "apikey", "access_token", "auth_token",
+    "client_secret", "private_key", "session_token", "refresh_token", "token",
+    "authorization", "cookie", "set_cookie", "jsessionid", "sessionid", "x_api_key",
+}
 
 
 # FUNCTION: redact_text
@@ -29,11 +41,34 @@ _SENSITIVE_KEYS = {"password", "passwd", "secret", "api_key", "apikey", "access_
 # Output: Caller ko required value, status, processed data ya structured result return karta hai.
 # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
 def redact_text(value: Any) -> str:
-    """Return a safe string representation with common secrets removed."""
+    """Return a safe string representation with common secrets removed.
+
+    Text that is actually JSON is recursively redacted first so stringified
+    telemetry cannot bypass dictionary-key protection. Remaining plain-text
+    and query-string key/value forms are then handled with conservative regexes.
+    """
     text = "" if value is None else str(value)
-    # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+
+    # Stringified JSON is common in Wazuh ``full_log`` and Splunk ``_raw``.
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, (dict, list)):
+        return json.dumps(redact_object(parsed), ensure_ascii=False, default=str)
+
     for pattern, replacement in _SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
+
+    def _replace_key_value(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        if match.group(2) is not None:
+            return f'{prefix}"[REDACTED]"'
+        if match.group(3) is not None:
+            return f"{prefix}'[REDACTED]'"
+        return f"{prefix}[REDACTED]"
+
+    text = _SECRET_KEY_VALUE_RE.sub(_replace_key_value, text)
     return text
 
 

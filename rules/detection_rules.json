@@ -8,7 +8,8 @@
     "risk_reason": "Configured rule score for a PowerShell execution detection; impact is not independently confirmed.",
     "mitre": "T1059.001",
     "mitre_name": "PowerShell",
-    "mitre_tactic": "Execution"
+    "mitre_tactic": "Execution",
+    "version": "1.0"
   },
   {
     "threat": "Credential Dumping",
@@ -19,7 +20,8 @@
     "risk_reason": "Configured rule score for credential-dumping evidence; successful credential theft is not independently confirmed.",
     "mitre": "T1003.001",
     "mitre_name": "LSASS Memory",
-    "mitre_tactic": "Credential Access"
+    "mitre_tactic": "Credential Access",
+    "version": "1.0"
   },
   {
     "threat": "Ransomware Execution",
@@ -30,18 +32,20 @@
     "risk_reason": "Configured rule score for destructive-impact evidence; actual impact requires corroboration.",
     "mitre": "T1486",
     "mitre_name": "Data Encrypted for Impact",
-    "mitre_tactic": "Impact"
+    "mitre_tactic": "Impact",
+    "version": "1.0"
   },
   {
     "threat": "Lateral Movement",
     "enabled": true,
     "description": "Lateral-movement activity identified by a supplied detection signature.",
-    "severity": "High",
+    "severity": "Critical",
     "risk_score": 9.2,
     "risk_reason": "Configured rule score for remote movement evidence; successful compromise of the destination is not independently confirmed.",
     "mitre": "T1021",
     "mitre_name": "Remote Services",
-    "mitre_tactic": "Lateral Movement"
+    "mitre_tactic": "Lateral Movement",
+    "version": "1.0"
   },
   {
     "threat": "Persistence",
@@ -52,6 +56,7 @@
     "risk_reason": "Configured rule score for persistence evidence; persistence success requires corroboration.",
     "mitre": "T1547",
     "mitre_name": "Boot or Logon Autostart Execution",
-    "mitre_tactic": "Persistence"
+    "mitre_tactic": "Persistence",
+    "version": "1.0"
   }
 ]

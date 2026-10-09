@@ -58,11 +58,24 @@ class DetectionParser:
 
         # Genuine Wazuh telemetry me aam taur par rule + agent + decoder/manager keys milti hain; in structural signals se source identify hota hai.
         wazuh_keys = {"rule", "agent", "manager", "decoder", "full_log", "location", "mitre"}
+        # OpenSearch/Splunk exports kabhi nested Wazuh fields ko dotted keys me flatten kar dete hain,
+        # jaise ``rule.id`` aur ``agent.name``. In strong Wazuh signals ko bhi source classification me count karo.
+        flattened_wazuh_keys = {
+            "rule.id", "rule.level", "rule.description", "rule.groups",
+            "agent.id", "agent.name", "agent.ip", "manager.name",
+            "decoder.name", "full_log", "location",
+        }
+        keys = {str(key).strip().lower() for key in record.keys()}
+        structural_key_names = {str(key).strip().lower() for key in wazuh_keys}
+        has_flattened_wazuh = len(flattened_wazuh_keys.intersection(keys)) >= 2 or (
+            "rule.id" in keys and any(key in keys for key in {"agent.id", "agent.name", "agent.ip"})
+        )
         # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
         if (
             source in {"wazuh", "wazuh-indexer", "wazuh_alert"}
-            or len(wazuh_keys.intersection(record.keys())) >= 2
+            or len(structural_key_names.intersection(keys)) >= 2
             or isinstance(record.get("rule"), dict) and isinstance(record.get("agent"), dict)
+            or has_flattened_wazuh
         ):
             return "wazuh"
 

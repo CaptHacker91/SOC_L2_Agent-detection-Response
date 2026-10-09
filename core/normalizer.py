@@ -68,9 +68,11 @@ class DataNormalizer:
         """Normalize a single record and retain the raw event exactly enough for investigation."""
         source_mode = (source_mode or "MOCK").upper()
         category = record.get("event_category") or "other"
+        is_wazuh = category == "wazuh" or looks_like_wazuh_event(record)
+        effective_category = "wazuh" if is_wazuh else category
 
         # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
-        if category == "wazuh" or looks_like_wazuh_event(record):
+        if is_wazuh:
             # Jo record pehle se normalized hai use unnecessary transformation ke bina preserve kiya jaata hai.
             # Raw Wazuh documents ke liye neeche diya gaya integration extractor use hota hai.
             # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
@@ -81,9 +83,9 @@ class DataNormalizer:
         else:
             normalized = self._normalize_generic(record, source_mode)
 
-        normalized["event_category"] = category
+        normalized["event_category"] = effective_category
         normalized["source"] = source_mode
-        normalized["source_type"] = category
+        normalized["source_type"] = effective_category
         return normalized
 
 
