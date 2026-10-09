@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.security import safe_json
+from core.security import redact_text, safe_json
 
 NA = "Not available in supplied telemetry"
 
@@ -65,9 +65,21 @@ def _value(obj: dict[str, Any] | Any, *keys: str) -> Any:
 # Input: df, alert, limit.
 # Output: Caller ko required value, status, processed data ya structured result return karta hai.
 # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
-def find_related_events(df: pd.DataFrame | None, alert: dict[str, Any], limit: int = 10) -> list[dict[str, Any]]:
-    """Find related loaded events using conservative evidence-based correlation."""
-    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
+def find_related_events(
+    df: pd.DataFrame | None,
+    alert: dict[str, Any],
+    limit: int = 10,
+    window_hours: int = 24 * 7,
+    mode: str = "auto",
+) -> list[dict[str, Any]]:
+    """Find nearby related events using explicit source-IP or host+rule correlation.
+
+    Correlation is intentionally conservative: the candidate must share the selected
+    event's source IP, or share both hostname and rule ID, and must fall within the
+    configured correlation window (7 days by default). Results are ordered by temporal
+    proximity and then correlation strength so the analyst sees the most useful
+    context first.
+    """
     if df is None or df.empty or not isinstance(alert, dict):
         return []
 
@@ -75,35 +87,95 @@ def find_related_events(df: pd.DataFrame | None, alert: dict[str, Any], limit: i
     source_ip = alert.get("source_ip")
     hostname = alert.get("hostname")
     rule_id = alert.get("rule_id")
-    related: list[dict[str, Any]] = []
+    try:
+        window_hours = max(1, int(window_hours))
+    except (TypeError, ValueError):
+        window_hours = 24 * 7
 
-    # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
+    current_ts = pd.to_datetime(alert.get("timestamp"), utc=True, errors="coerce")
+    if pd.isna(current_ts):
+        # Without a trustworthy timestamp, silently correlating arbitrary records is unsafe.
+        return []
+
+    candidates: list[dict[str, Any]] = []
     for _, row in df.iterrows():
         item = row.to_dict()
-        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
         if str(item.get("id", "")) == current_id:
             continue
-        same_ip = is_present(source_ip) and is_present(item.get("source_ip")) and str(source_ip) == str(item.get("source_ip"))
+
+        item_ts = pd.to_datetime(item.get("timestamp"), utc=True, errors="coerce")
+        if pd.isna(item_ts):
+            continue
+        delta_hours = abs((current_ts - item_ts).total_seconds()) / 3600.0
+        if delta_hours > window_hours:
+            continue
+
+        same_ip = (
+            is_present(source_ip)
+            and is_present(item.get("source_ip"))
+            and str(source_ip) == str(item.get("source_ip"))
+        )
         same_host_rule = (
-            is_present(hostname) and is_present(item.get("hostname"))
+            is_present(hostname)
+            and is_present(item.get("hostname"))
             and str(hostname) == str(item.get("hostname"))
-            and is_present(rule_id) and is_present(item.get("rule_id"))
+            and is_present(rule_id)
+            and is_present(item.get("rule_id"))
             and str(rule_id) == str(item.get("rule_id"))
         )
-        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
-        if same_ip or same_host_rule:
-            related.append({
-                "id": str(item.get("id", NA)),
-                "timestamp": item.get("timestamp", NA),
-                "severity": item.get("severity", NA),
-                "threat": item.get("threat", NA),
-                "reason": item.get("detection_reason", NA),
-                "line": _related_line(item),
-            })
-        # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
-        if len(related) >= max(1, limit):
-            break
-    return related
+        same_host = is_present(hostname) and is_present(item.get("hostname")) and str(hostname) == str(item.get("hostname"))
+        same_user = is_present(alert.get("username")) and is_present(item.get("username")) and str(alert.get("username")) == str(item.get("username"))
+        same_rule = is_present(rule_id) and is_present(item.get("rule_id")) and str(rule_id) == str(item.get("rule_id"))
+        if mode == "source_ip":
+            accepted = same_ip
+        elif mode == "host":
+            accepted = same_host
+        elif mode == "username":
+            accepted = same_user
+        elif mode == "rule":
+            accepted = same_rule
+        elif mode == "host_rule":
+            accepted = same_host_rule
+        else:
+            accepted = same_ip or same_host_rule
+        if not accepted:
+            continue
+
+        reasons = []
+        if same_ip:
+            reasons.append(f"Same source IP ({source_ip})")
+        if same_host_rule:
+            reasons.append(f"Same host + rule ({hostname}, {rule_id})")
+        if mode == "host" and same_host:
+            reasons.append(f"Same host ({hostname})")
+        if mode == "username" and same_user:
+            reasons.append(f"Same username ({alert.get('username')})")
+        if mode == "rule" and same_rule:
+            reasons.append(f"Same rule ({rule_id})")
+
+        strength = (2 if same_host_rule else 0) + (1 if same_ip else 0) + (1 if same_user else 0) + (1 if same_rule else 0)
+        confidence = "Strong" if strength >= 2 else "Moderate" if strength == 1 else "Weak"
+        candidates.append({
+            "id": str(item.get("id", NA)),
+            "timestamp": item.get("timestamp", NA),
+            "severity": item.get("severity", NA),
+            "threat": item.get("threat", NA),
+            "correlation": "; ".join(reasons),
+            "detection_reason": item.get("detection_reason", NA),
+            "line": _related_line(item),
+            "correlation_confidence": confidence,
+            "correlation_window_hours": round(delta_hours, 2),
+            "_delta_hours": delta_hours,
+            "_strength": strength,
+        })
+
+    candidates.sort(key=lambda item: (item["_delta_hours"], -item["_strength"]))
+    limit = max(1, int(limit))
+    visible = candidates[:limit]
+    for item in visible:
+        item.pop("_delta_hours", None)
+        item.pop("_strength", None)
+    return visible
 
 
 # FUNCTION: _related_line
@@ -113,7 +185,7 @@ def find_related_events(df: pd.DataFrame | None, alert: dict[str, Any], limit: i
 # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
 def _related_line(row: dict[str, Any]) -> str:
     raw = row.get("original_log") if is_present(row.get("original_log")) else row.get("raw_event")
-    raw_text = safe_json(raw, max_chars=1200) if isinstance(raw, (dict, list)) else str(raw or NA)
+    raw_text = safe_json(raw, max_chars=1200)
     return f"{row.get('timestamp', row.get('event_time', NA))} | {row.get('severity', NA)} | {row.get('threat', NA)} | {raw_text}"
 
 
@@ -147,6 +219,8 @@ def build_incident_context(alert: dict[str, Any], related: list[dict[str, Any]] 
         # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
         if isinstance(value, (dict, list)):
             value = safe_json(value, max_chars=3000)
+        else:
+            value = redact_text(value)
         lines.append(f"{label}: {value}")
 
     raw = alert.get("raw_event")
@@ -157,7 +231,12 @@ def build_incident_context(alert: dict[str, Any], related: list[dict[str, Any]] 
     if related:
         # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
         for event in related:
-            lines.append(f"[{event.get('id', NA)}] {event.get('line', NA)}")
+            correlation = event.get("correlation", NA)
+            detection_reason = event.get("detection_reason", NA)
+            lines.append(
+                f"[{event.get('id', NA)}] Correlation: {correlation} | "
+                f"Detection: {detection_reason} | Event: {event.get('line', NA)}"
+            )
     else:
-        lines.append("No related events among the currently loaded telemetry.")
+        lines.append("No related events among the currently loaded telemetry using the configured correlation criteria.")
     return "\n".join(lines)

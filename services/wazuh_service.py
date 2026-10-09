@@ -166,9 +166,18 @@ def looks_like_wazuh_event(event: Any) -> bool:
     if isinstance(event.get("_source"), dict):
         return looks_like_wazuh_event(event["_source"])
     structural_keys = {"rule", "agent", "manager", "decoder", "full_log", "location", "mitre"}
-    return len(structural_keys.intersection(event.keys())) >= 2 or (
-        isinstance(event.get("rule"), dict) and isinstance(event.get("agent"), dict)
+    keys = {str(key).strip().lower() for key in event.keys()}
+    flattened_keys = {
+        "rule.id", "rule.level", "rule.description", "rule.groups",
+        "agent.id", "agent.name", "agent.ip", "manager.name", "decoder.name",
+    }
+    has_flattened_wazuh = len(flattened_keys.intersection(keys)) >= 2 or (
+        "rule.id" in keys and any(key in keys for key in {"agent.id", "agent.name", "agent.ip"})
     )
+    structural_key_names = {str(key).strip().lower() for key in structural_keys}
+    return len(structural_key_names.intersection(keys)) >= 2 or (
+        isinstance(event.get("rule"), dict) and isinstance(event.get("agent"), dict)
+    ) or has_flattened_wazuh
 
 
 # FUNCTION: _extract_hash
@@ -246,14 +255,20 @@ def normalize_wazuh_alert(hit: dict[str, Any], display_source: str = "WAZUH") ->
         "data.win.eventdata.destinationHostname",
         "domain",
     )
-    # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
-    if not domain and url:
-        # External/file/network ya risky operation ko safely handle karne ke liye yaha exception handling use ho rahi hai.
+    uri_path = first_value(alert, "data.uri_path", "data.uri", "uri_path")
+    uri_query = first_value(alert, "data.uri_query", "uri_query")
+    if url:
+        # URL/URI path and query are direct evidence-derived fields; no values are inferred.
         try:
             parts = urlsplit(url)
-            domain = parts.hostname if parts.hostname else None
+            if not domain and parts.hostname:
+                domain = parts.hostname
+            if not uri_path and parts.path:
+                uri_path = parts.path
+            if uri_query is None and parts.query:
+                uri_query = parts.query
         except ValueError:
-            domain = None
+            pass
 
     http_method = first_value(alert, "data.http_method", "data.method", "data.win.eventdata.httpMethod", "http_method")
     # Yaha condition check karke decide kiya ja raha hai ki agla logic execute karna hai ya nahi.
@@ -363,6 +378,7 @@ def normalize_wazuh_alert(hit: dict[str, Any], display_source: str = "WAZUH") ->
         "filename": first_value(
             alert,
             "syscheck.path",
+            "data.path",
             "data.win.eventdata.targetFilename",
             "data.audit.file.name",
             "filename",
@@ -371,8 +387,8 @@ def normalize_wazuh_alert(hit: dict[str, Any], display_source: str = "WAZUH") ->
         "domain": domain,
         "http_method": http_method,
         "http_status": http_status,
-        "uri_path": first_value(alert, "data.uri_path", "data.uri", "uri_path"),
-        "uri_query": first_value(alert, "data.uri_query", "uri_query"),
+        "uri_path": uri_path,
+        "uri_query": uri_query,
         "referer": first_value(alert, "data.referer", "referer"),
         "user_agent": first_value(alert, "data.user_agent", "user_agent"),
         "original_log": clean_scalar(alert.get("full_log")),

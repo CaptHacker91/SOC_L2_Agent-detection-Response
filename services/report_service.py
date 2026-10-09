@@ -10,8 +10,12 @@
 # In imports ka use neeche data processing, UI, API integration ya testing me hota hai.
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
@@ -20,7 +24,7 @@ from core.security import redact_text, safe_json
 from services.incident_context import is_present
 
 NA_TEXT = "Not available in supplied telemetry"
-LONG_TOKEN = re.compile(r"\S{21,}")
+LONG_TOKEN = re.compile(r"\S{41,}")
 
 
 # FUNCTION: _break_long_tokens
@@ -118,12 +122,32 @@ def _v(alert: dict, key: str):
 # Input: alert, ai_summary.
 # Output: Caller ko required value, status, processed data ya structured result return karta hai.
 # Motive: Is processing ko separate rakhne ka goal code ko modular, readable aur easy-to-test banana hai.
-def build_report_data(alert: dict, ai_summary: str = "") -> dict:
+def build_report_data(alert: dict, ai_summary: str = "", related=None, case: dict | None = None, analyst_decision: str = "", analyst_note: str = "", assigned_analyst: str = "") -> dict:
     """Build a stable report payload from one incident dictionary."""
     rec = get_recommendations(alert.get("mitre_tactic"), alert.get("severity"))
-    return {
+    case = case or {}
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    payload = {
         "incident_id": _v(alert, "id"),
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "case_id": _v(case, "case_id") if case else "Not assigned",
+        "source": _v(alert, "source"),
+        "severity": _v(alert, "severity"),
+        "rule_id": _v(alert, "rule_id"),
+        "mapped_technique": _v(alert, "mapped_technique"),
+        "evidence_fingerprint": _v(alert, "event_fingerprint"),
+    }
+    evidence_payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return {
+        "report_version": "1.1",
+        "incident_id": _v(alert, "id"),
+        "case_id": _v(case, "case_id") if case else "Not assigned",
+        "case_status": _v(case, "status") if case else "NEW",
+        "case_priority": _v(case, "priority") if case else "P3",
+        "assigned_analyst": assigned_analyst or _v(case, "assigned_analyst") if case else (assigned_analyst or "Unassigned"),
+        "analyst_decision": analyst_decision or _v(case, "decision") if case else (analyst_decision or "Not recorded"),
+        "analyst_note": analyst_note or _v(case, "note") if case else (analyst_note or "Not recorded"),
+        "generated_at": generated_at,
+        "evidence_payload_hash": evidence_payload_hash,
         "event_time": _v(alert, "timestamp"),
         "source_system": _v(alert, "source"),
         "source_type": _v(alert, "source_type"),
@@ -156,14 +180,24 @@ def build_report_data(alert: dict, ai_summary: str = "") -> dict:
         "domain": _v(alert, "domain"),
         "url": _v(alert, "url"),
         "uri_path": _v(alert, "uri_path"),
+        "uri_query": _v(alert, "uri_query"),
         "http_method": _v(alert, "http_method"),
         "http_status": _v(alert, "http_status"),
         "business_impact": _v(alert, "business_impact"),
         "investigation_priority": _v(alert, "investigation_priority"),
+        "event_fingerprint": _v(alert, "event_fingerprint"),
+        "duplicate_status": _v(alert, "duplicate_status"),
+        "evidence_completeness": _v(alert, "evidence_completeness_label"),
+        "evidence_checklist": _v(alert, "evidence_checklist"),
+        "why_alert_fired": _v(alert, "why_alert_fired"),
+        "rule_version": _v(alert, "rule_version"),
+        "rule_description": _v(alert, "rule_description"),
+        "rule_source": _v(alert, "rule_source"),
         "investigation_steps": rec["investigation"],
         "containment_actions": rec["containment"],
         "remediation_steps": rec["remediation"],
         "ai_summary": ai_summary or "Not generated for this report.",
+        "related_events": list(related or [])[:10],
         "raw_event": safe_json(alert.get("raw_event"), max_chars=8000),
     }
 
@@ -270,22 +304,55 @@ def generate_pdf(report_data: dict) -> bytes:
     ]:
         kv(label, report_data.get(key, NA_TEXT))
 
-    section("4. MITRE ATT&CK Mapping")
+    section("4. Analyst Case Control")
+    for label, key in [
+        ("Case ID", "case_id"), ("Case Status", "case_status"), ("Case Priority", "case_priority"),
+        ("Assigned Analyst", "assigned_analyst"), ("Analyst Decision", "analyst_decision"), ("Analyst Note", "analyst_note"),
+        ("Evidence Completeness", "evidence_completeness"), ("Event Fingerprint", "event_fingerprint"),
+    ]:
+        kv(label, report_data.get(key, NA_TEXT))
+
+    section("5. Rule Explainability")
+    for label, key in [("Why Alert Fired", "why_alert_fired"), ("Rule Version", "rule_version"), ("Rule Description", "rule_description"), ("Rule Source", "rule_source"), ("Duplicate Status", "duplicate_status"), ("Evidence Checklist", "evidence_checklist")]:
+        kv(label, report_data.get(key, NA_TEXT))
+
+    section("6. MITRE ATT&CK Mapping")
     kv("Technique ID", report_data["mitre_technique"])
     kv("Technique Name", report_data["mitre_technique_name"])
     kv("Tactic", report_data["mitre_tactic"])
     kv("Mapping Source", report_data["mitre_mapping_source"])
 
-    section("5. Indicators and Event Fields")
+    section("7. Indicators and Event Fields")
     # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
     for label, key in [
         ("Process", "process"), ("Command", "command"), ("Filename", "filename"), ("File Hash", "file_hash"),
-        ("Domain", "domain"), ("URL", "url"), ("URI Path", "uri_path"), ("HTTP Method", "http_method"),
-        ("HTTP Status", "http_status"),
+        ("Domain", "domain"), ("URL", "url"), ("URI Path", "uri_path"), ("URI Query", "uri_query"),
+        ("HTTP Method", "http_method"), ("HTTP Status", "http_status"),
     ]:
         kv(label, report_data[key])
 
-    section("6. SOC Recommendations")
+    section("8. Related Events")
+    related_events = report_data.get("related_events") or []
+    if related_events:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 5, _sanitize(
+            "Correlation context: same source IP or same host + rule ID within the 7-day correlation window. "
+            "Related events provide context only and do not prove compromise."
+        ), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        for item in related_events:
+            summary = (
+                f"{item.get('id', NA_TEXT)} | {item.get('timestamp', NA_TEXT)} | "
+                f"{item.get('severity', NA_TEXT)} | {item.get('threat', NA_TEXT)} | "
+                f"{item.get('correlation', NA_TEXT)}"
+            )
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 5, _sanitize(f"- {summary}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    else:
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 5, _sanitize("No related events were found using the bounded correlation rule."), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    section("9. SOC Recommendations")
     # Is loop ke through records/items ko one-by-one process kiya ja raha hai.
     for title, key in [("Investigation Steps", "investigation_steps"), ("Containment Actions", "containment_actions"), ("Remediation Steps", "remediation_steps")]:
         pdf.set_font("Helvetica", "B", 10)
@@ -296,7 +363,7 @@ def generate_pdf(report_data: dict) -> bytes:
             pdf.set_x(pdf.l_margin)
             pdf.multi_cell(0, 6, _sanitize(f"- {item}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    section("7. AI-Assisted Analysis")
+    section("10. AI-Assisted Analysis")
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(0, 5, _sanitize("AI-generated content is advisory only and must be verified against supplied telemetry."), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -304,7 +371,7 @@ def generate_pdf(report_data: dict) -> bytes:
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(0, 5, _sanitize(report_data["ai_summary"][:10000]), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    section("8. Redacted Raw Event")
+    section("11. Redacted Raw Event")
     pdf.set_font("Courier", "", 7)
     pdf.set_x(pdf.l_margin)
     pdf.multi_cell(0, 4, _sanitize(report_data["raw_event"]), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -316,4 +383,44 @@ def generate_pdf(report_data: dict) -> bytes:
         "This report reflects the telemetry supplied to SOC L2 Agent. Missing values are not inferred. "
         "Do not treat severity, risk, AI output or a single rule match as independent proof of compromise."
     ), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(0, 4, _sanitize(f"Evidence payload SHA-256: {report_data.get('evidence_payload_hash', 'Not available')} | Report schema: {report_data.get('report_version', '1.0')}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     return bytes(pdf.output())
+
+
+def build_incident_package(report_data: dict) -> bytes:
+    """Build a portable incident evidence package containing report and bounded JSON artifacts."""
+    pdf = generate_pdf(report_data)
+    raw_event = report_data.get("raw_event") or "{}"
+    normalized = {key: report_data.get(key) for key in (
+        "incident_id", "case_id", "case_status", "case_priority", "assigned_analyst", "analyst_decision",
+        "severity", "risk_score", "confidence", "rule_id", "rule_version", "mapped_technique", "mitre_tactic",
+        "event_fingerprint", "duplicate_status", "evidence_completeness", "why_alert_fired", "source_system",
+        "hostname", "source_ip", "destination_ip", "username", "timestamp",
+    )}
+    manifest = {
+        "package_version": "1.0",
+        "incident_id": report_data.get("incident_id"),
+        "case_id": report_data.get("case_id"),
+        "generated_at": report_data.get("generated_at"),
+        "contents": ["incident_report.pdf", "evidence.json", "normalized_evidence.json", "mitre_mapping.json", "analyst_notes.txt", "case_history.json", "audit_history.json", "integrity_manifest.json"],
+    }
+    files = {
+        "incident_report.pdf": pdf,
+        "evidence.json": json.dumps({"raw_event": raw_event}, indent=2, default=str).encode("utf-8"),
+        "normalized_evidence.json": json.dumps(normalized, indent=2, default=str).encode("utf-8"),
+        "mitre_mapping.json": json.dumps({"technique": report_data.get("mitre_technique"), "name": report_data.get("mitre_technique_name"), "tactic": report_data.get("mitre_tactic"), "mapping_source": report_data.get("mitre_mapping_source")}, indent=2, default=str).encode("utf-8"),
+        "analyst_notes.txt": _sanitize(report_data.get("analyst_note", "Not recorded")).encode("utf-8", "replace"),
+        "case_history.json": json.dumps(report_data.get("case_history", []), indent=2, default=str).encode("utf-8"),
+        "audit_history.json": json.dumps(report_data.get("audit_history", []), indent=2, default=str).encode("utf-8"),
+    }
+    for name, content in files.items():
+        manifest.setdefault("sha256", {})[name] = hashlib.sha256(content).hexdigest()
+    manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8")
+    files["integrity_manifest.json"] = manifest_bytes
+    out = BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return out.getvalue()
